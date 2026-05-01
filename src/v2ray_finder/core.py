@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import requests
 
+from .cache import CacheManager
 from .exceptions import (
     AuthenticationError,
     ErrorType,
@@ -46,7 +47,15 @@ class V2RayServerFinder:
     # Environment variable name for token
     TOKEN_ENV_VAR = "GITHUB_TOKEN"
 
-    def __init__(self, token: Optional[str] = None, raise_errors: bool = False):
+    def __init__(
+        self,
+        token: Optional[str] = None,
+        raise_errors: bool = False,
+        cache_backend: str = "memory",
+        cache_ttl_repos: int = 3600,
+        cache_ttl_urls: int = 1800,
+        cache_enabled: bool = True,
+    ):
         """
         Initialize V2RayServerFinder.
 
@@ -66,6 +75,11 @@ class V2RayServerFinder:
 
             raise_errors: If True, raise exceptions instead of logging and returning empty results.
                          This is useful for applications that want explicit error handling.
+            cache_backend: Cache backend to use: 'memory' (default) or 'disk'.
+                           'disk' requires the optional [cache] extra: pip install v2ray-finder[cache]
+            cache_ttl_repos: TTL in seconds for cached GitHub search/repo-files results (default: 3600).
+            cache_ttl_urls: TTL in seconds for cached URL content results (default: 1800).
+            cache_enabled: Set to False to disable caching entirely (useful for testing).
         """
         self.headers = {"Accept": "application/vnd.github.v3+json"}
         self.raise_errors = raise_errors
@@ -75,6 +89,22 @@ class V2RayServerFinder:
         # Stop mechanism for graceful interruption
         self._stop_requested = threading.Event()
         self._lock = threading.Lock()
+
+        # Cache TTLs kept as instance attributes so tests can inspect them
+        self._cache_ttl_repos = cache_ttl_repos
+        self._cache_ttl_urls = cache_ttl_urls
+
+        # Initialise cache — always succeeds; falls back to MemoryCache on error
+        self._cache = CacheManager(
+            backend=cache_backend,
+            ttl=cache_ttl_repos,
+            enabled=cache_enabled,
+        )
+        logger.debug(
+            f"Cache initialised: backend={cache_backend}, "
+            f"ttl_repos={cache_ttl_repos}s, ttl_urls={cache_ttl_urls}s, "
+            f"enabled={cache_enabled}"
+        )
 
         # Try to get token from environment if not provided
         if token is None:
@@ -107,6 +137,33 @@ class V2RayServerFinder:
                 "No GitHub token provided - using unauthenticated access (rate limit: 60/hour)"
             )
 
+    # ------------------------------------------------------------------
+    # Cache helpers
+    # ------------------------------------------------------------------
+
+    def clear_cache(self) -> bool:
+        """Clear all cached results.
+
+        Returns:
+            True if the cache was cleared successfully.
+        """
+        success = self._cache.clear()
+        if success:
+            logger.info("Cache cleared")
+        return success
+
+    def get_cache_stats(self) -> Dict:
+        """Return cache hit/miss/set/error statistics.
+
+        Returns:
+            Dict with keys: hits, misses, sets, errors, hit_rate
+        """
+        return self._cache.get_stats()
+
+    # ------------------------------------------------------------------
+    # Stop mechanism
+    # ------------------------------------------------------------------
+
     def request_stop(self):
         """Request graceful stop of ongoing operations."""
         self._stop_requested.set()
@@ -123,6 +180,10 @@ class V2RayServerFinder:
             True if stop was requested, False otherwise
         """
         return self._stop_requested.is_set()
+
+    # ------------------------------------------------------------------
+    # Token validation
+    # ------------------------------------------------------------------
 
     def _validate_and_sanitize_token(self, token: str) -> Optional[str]:
         """
@@ -179,8 +240,19 @@ class V2RayServerFinder:
 
         return token
 
+    # ------------------------------------------------------------------
+    # Class-method constructors
+    # ------------------------------------------------------------------
+
     @classmethod
-    def from_env(cls, raise_errors: bool = False) -> "V2RayServerFinder":
+    def from_env(
+        cls,
+        raise_errors: bool = False,
+        cache_backend: str = "memory",
+        cache_ttl_repos: int = 3600,
+        cache_ttl_urls: int = 1800,
+        cache_enabled: bool = True,
+    ) -> "V2RayServerFinder":
         """
         Create V2RayServerFinder instance using token from environment variable.
 
@@ -188,6 +260,10 @@ class V2RayServerFinder:
 
         Args:
             raise_errors: If True, raise exceptions instead of logging errors
+            cache_backend: Cache backend ('memory' or 'disk')
+            cache_ttl_repos: TTL in seconds for GitHub API responses (default: 3600)
+            cache_ttl_urls: TTL in seconds for URL content (default: 1800)
+            cache_enabled: Whether to enable caching (default: True)
 
         Returns:
             V2RayServerFinder instance
@@ -196,7 +272,18 @@ class V2RayServerFinder:
             export GITHUB_TOKEN="your_token_here"
             finder = V2RayServerFinder.from_env()
         """
-        return cls(token=None, raise_errors=raise_errors)
+        return cls(
+            token=None,
+            raise_errors=raise_errors,
+            cache_backend=cache_backend,
+            cache_ttl_repos=cache_ttl_repos,
+            cache_ttl_urls=cache_ttl_urls,
+            cache_enabled=cache_enabled,
+        )
+
+    # ------------------------------------------------------------------
+    # Rate-limit helpers
+    # ------------------------------------------------------------------
 
     def _check_rate_limit(self, response: requests.Response) -> None:
         """Check and store rate limit information from response headers.
@@ -258,11 +345,18 @@ class V2RayServerFinder:
         """
         return self._last_rate_limit_info.copy() if self._last_rate_limit_info else None
 
+    # ------------------------------------------------------------------
+    # Core API methods (with caching)
+    # ------------------------------------------------------------------
+
     def search_repos(
         self, keywords: Optional[List[str]] = None, max_results: int = 30
     ) -> Result[List[Dict], V2RayFinderError]:
         """
         Search GitHub repositories matching keywords.
+
+        Results are cached for cache_ttl_repos seconds to avoid hitting the
+        GitHub API rate limit on repeated calls with the same arguments.
 
         Args:
             keywords: List of search keywords (default: ["v2ray", "free", "config"])
@@ -278,6 +372,13 @@ class V2RayServerFinder:
 
         if keywords is None:
             keywords = ["v2ray", "free", "config"]
+
+        # --- cache lookup ---
+        cache_key = self._cache._make_key("search_repos", sorted(keywords), max_results)
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            logger.debug(f"search_repos cache hit for keywords={keywords}")
+            return Ok(cached)
 
         query = "+".join(keywords)
         url = f"{self.BASE_URL}/search/repositories"
@@ -324,6 +425,11 @@ class V2RayServerFinder:
                 )
 
             logger.info(f"Found {len(results)} repositories matching '{query}'")
+
+            # Only cache complete (non-interrupted) results
+            if not self.should_stop():
+                self._cache.set(cache_key, results, ttl=self._cache_ttl_repos)
+
             return Ok(results)
 
         except RateLimitError as e:
@@ -387,6 +493,8 @@ class V2RayServerFinder:
         """
         Get config files from a GitHub repository.
 
+        Results are cached for cache_ttl_repos seconds.
+
         Args:
             repo_full_name: Full repository name (e.g., "user/repo")
             path: Optional subdirectory path
@@ -398,6 +506,13 @@ class V2RayServerFinder:
         if self.should_stop():
             logger.info("Get repo files stopped by user request")
             return Ok([])
+
+        # --- cache lookup ---
+        cache_key = self._cache._make_key("get_repo_files", repo_full_name, path)
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            logger.debug(f"get_repo_files cache hit for {repo_full_name}/{path}")
+            return Ok(cached)
 
         url = f"{self.BASE_URL}/repos/{repo_full_name}/contents/{path}"
 
@@ -439,6 +554,11 @@ class V2RayServerFinder:
                         )
 
             logger.info(f"Found {len(config_files)} config files in {repo_full_name}")
+
+            # Only cache complete (non-interrupted) results
+            if not self.should_stop():
+                self._cache.set(cache_key, config_files, ttl=self._cache_ttl_repos)
+
             return Ok(config_files)
 
         except (RateLimitError, AuthenticationError, RepositoryNotFoundError) as e:
@@ -512,6 +632,9 @@ class V2RayServerFinder:
         """
         Fetch and parse servers from a URL.
 
+        Results are cached for cache_ttl_urls seconds to avoid re-downloading
+        the same subscription files on repeated calls.
+
         Args:
             url: URL to fetch server configs from
             timeout: Request timeout in seconds
@@ -524,12 +647,24 @@ class V2RayServerFinder:
             logger.info("Get servers from URL stopped by user request")
             return Ok([])
 
+        # --- cache lookup ---
+        cache_key = self._cache._make_key("get_servers_from_url", url)
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            logger.debug(f"get_servers_from_url cache hit for {url}")
+            return Ok(cached)
+
         try:
             response = requests.get(url, timeout=timeout)
             response.raise_for_status()
 
             servers = self._parse_servers(response.text)
             logger.info(f"Fetched {len(servers)} servers from {url}")
+
+            # Only cache complete (non-interrupted) results
+            if not self.should_stop():
+                self._cache.set(cache_key, servers, ttl=self._cache_ttl_urls)
+
             return Ok(servers)
 
         except requests.exceptions.Timeout as e:
