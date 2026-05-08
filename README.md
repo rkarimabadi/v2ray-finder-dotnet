@@ -21,6 +21,39 @@ A **high-performance** tool to **fetch, aggregate, validate and health-check pub
 
 ---
 
+## 🚀 What's New — xray Real Connectivity (in progress)
+
+### True proxy validation via xray-core — three-layer architecture
+
+Previous health checks (TCP connect, HTTP reachability) told us the port
+is open — **not** that the proxy actually forwards traffic.  The new
+xray integration fixes this.
+
+| Layer | Module | What it does |
+|-------|--------|--------------|
+| **1** | `xray_runner.py` | Locate / auto-download xray binary; start/stop the process |
+| **2** | `xray_config_adapter.py` | Convert `vmess://` / `vless://` / `trojan://` / `ss://` → xray JSON config |
+| **3** | `xray_connectivity.py` | Route `GET generate_204` through the SOCKS5 proxy; measure real latency |
+
+```python
+from v2ray_finder.xray_connectivity import RealConnectivityChecker
+
+checker = RealConnectivityChecker()   # auto-downloads xray if needed
+
+# Single server — full three-layer check
+import asyncio
+result = asyncio.run(checker.check_server_real("vless://uuid@host:443?..."))
+print(result.reachable, result.latency_ms, result.google_204_ok)
+
+# Batch — concurrent, semaphore-limited
+servers = [(config, protocol), ...]
+results = checker.check_servers_real(servers)   # sync wrapper
+```
+
+> Requires `pip install aiohttp-socks` (or `pip install "v2ray-finder[xray]"`)
+
+---
+
 ## 🚀 What's New in v0.4.0 — Multi-Source Pipeline
 
 ### 32 Sources · Structural Dedup · Scoring Engine (closes #4)
@@ -36,71 +69,38 @@ A **high-performance** tool to **fetch, aggregate, validate and health-check pub
 from v2ray_finder import V2RayServerFinder
 
 finder = V2RayServerFinder.from_env()
-
-# Fetch + health-check + score in one call
 ranked = finder.get_scored_servers(check_health=True, min_score=0.5)
 for srv in ranked[:10]:
     print(f"[{srv['grade']}] {srv['total_score']:.2f}  {srv['config'][:60]}")
 
-# Inspect per-source reliability after run
 print(finder.get_source_registry().summary())
-
-# Dynamic GitHub topic discovery
-servers = finder.get_servers_from_topic_discovery(
-    topics=["v2ray-config", "free-v2ray"],
-    max_repos_per_topic=5,
-)
 ```
-
-> See full details in [📋 CHANGELOG.md](CHANGELOG.md)
 
 ---
 
-## 🚀 What's New in v0.3.0
-
-### ⚡ Real-Time Health Checking — Servers Checked as They're Found
-
-🔴 **Old behaviour:** collect all servers → then batch health-check  
-🟢 **New behaviour:** each server is health-checked **immediately** as it is discovered
+## 🚀 What's New in v0.3.0 — Real-Time Health Checking
 
 Three check methods run **concurrently** per server:
 
 | Method | What it checks |
 |--------|----------------|
-| 🔌 **TCP** | Raw socket connect to `host:port` — is the port open? |
-| 🌐 **HTTP** | Lightweight HTTP GET to `host:port` — is it responding? |
-| ✅ **Google 204** | `GET connectivitycheck.gstatic.com/generate_204` — does the host have working internet? |
-
-> The Google 204 check is the same mechanism Android uses to detect captive portals.
+| 🔌 **TCP** | Raw socket connect to `host:port` |
+| 🌐 **HTTP** | Lightweight HTTP GET to `host:port` |
+| ✅ **xray + Google 204** | Traffic through the proxy → `generate_204` *(new layer)* |
 
 ```python
-from v2ray_finder import V2RayServerFinder
-
 finder = V2RayServerFinder(
     realtime_health_check=True,
-    health_enable_google_204=True,
-    health_enable_http_check=True,
     health_timeout=5.0,
 )
 servers = finder.get_all_servers()
-print(f"Live servers: {len(servers)}")
 ```
 
-> See full details in [📋 CHANGELOG.md](CHANGELOG.md)
-
 ---
 
-## 🚀 v0.2.1 — Ctrl+C & Graceful Stop
+## 🎯 Features
 
-⌨️ **Ctrl+C now works everywhere** — all fetch layers catch KeyboardInterrupt and save partial results  
-🔒 **Thread-safe StopController** — `threading.Event` replaces bare boolean flag  
-🏥 **Batch health checking** — `health_batch_size` param, stop checked between every batch  
-
----
-
-## 🎯 Features / ویژگی‌ها
-
-### Core Features / ویژگی‌های اصلی
+### Core
 - 🔍 **GitHub repository search** + **32 curated sources**
 - 🚀 **Three interfaces**: Python API, CLI (simple & rich), GUI (PySide6)
 - 📦 **Structural deduplication** on `(protocol, host, port, uuid)`
@@ -108,39 +108,32 @@ print(f"Live servers: {len(servers)}")
 - 💾 **Export** to text files
 - 📊 **Statistics** by protocol
 
-### Performance & Reliability / کارایی و قابلیت اطمینان
-- ⚡ **Async HTTP fetching**: **10-50x faster** concurrent downloads
-- 💾 **Smart caching**: **80-95% fewer** API calls
-- ⚡ **Real-time health checking**: every server checked immediately upon discovery
-- ✅ **Three health methods**: TCP + HTTP reachability + Google 204 connectivity
+### Performance & Reliability
+- ⚡ **Async HTTP fetching**: 10-50x faster concurrent downloads
+- 💾 **Smart caching**: 80-95% fewer API calls
+- 🔌 **TCP + HTTP health checks**: fast pre-filters
+- ✅ **xray real connectivity**: true end-to-end proxy validation
 - 🏆 **Scoring engine**: rank servers A–F by quality
 - 📡 **Source registry**: per-source reliability tracking
-- 🔄 **Retry logic**: Automatic retry with exponential backoff
-- ⛔ **Graceful interruption**: Ctrl+C saves partial results before exit
-
-### Developer Experience / تجربه توسعه‌دهنده
-- 🛡️ **Robust error handling**: Detailed exception hierarchy
-- 📈 **Rate limit tracking**: Monitor GitHub API usage
-- 🔒 **Secure token handling**: Environment variable support
-- 🧪 **~80% test coverage** (target: 90%)
-- ✅ **CI/CD**: Automated testing and deployment
-- 🐍 **Python 3.8 – 3.14** fully supported
+- ⛔ **Graceful interruption**: Ctrl+C saves partial results
 
 ---
 
-## 📋 Requirements / پیش‌نیازها
+## 📋 Requirements
 
 - **Python** 3.8 – 3.14
 - **Internet connection**
-- **Optional**: aiohttp/httpx (async + health checks), diskcache (caching), PySide6 (GUI)
+- **Optional**: `aiohttp` (async + health checks), `aiohttp-socks` (xray
+  real connectivity), `diskcache` (caching), `PySide6` (GUI)
 
 ---
 
-## 📦 Installation / نصب
+## 📦 Installation
 
 ```bash
 pip install v2ray-finder
-pip install "v2ray-finder[async]"      # async + health checks (recommended)
+pip install "v2ray-finder[async]"      # async + TCP/HTTP health checks
+pip install "v2ray-finder[xray]"       # real connectivity via xray-core
 pip install "v2ray-finder[cache]"      # caching
 pip install "v2ray-finder[all]"        # everything
 ```
@@ -155,7 +148,7 @@ pip install -e ".[all,dev]"
 
 ---
 
-## 🔒 Token Security / امنیت Token
+## 🔒 Token Security
 
 ```bash
 export GITHUB_TOKEN="ghp_your_token_here"
@@ -165,9 +158,30 @@ export GITHUB_TOKEN="ghp_your_token_here"
 
 ---
 
-## 📚 Library Usage / استفاده به‌صورت کتابخانه
+## 📚 Library Usage
 
-### Scored Output (New! ✨)
+### Real Connectivity Check (xray) — New ✨
+
+```python
+from v2ray_finder.xray_connectivity import RealConnectivityChecker
+import asyncio
+
+checker = RealConnectivityChecker(timeout=10.0, concurrent_limit=5)
+
+# Single server
+result = asyncio.run(checker.check_server_real("vless://..."))
+print(result.reachable, result.latency_ms, result.google_204_ok)
+
+# Batch
+results = checker.check_servers_real([
+    ("vmess://...", "vmess"),
+    ("vless://...", "vless"),
+])
+for r in results:
+    print(f"{r.protocol:8s} | ok={r.reachable} | {r.latency_ms:.0f}ms")
+```
+
+### Scored Output
 
 ```python
 from v2ray_finder import V2RayServerFinder
@@ -176,49 +190,20 @@ finder = V2RayServerFinder.from_env()
 ranked = finder.get_scored_servers(check_health=True, min_score=0.5)
 for srv in ranked[:10]:
     print(f"[{srv['grade']}] {srv['total_score']:.2f}  {srv['config'][:60]}")
-
-# Per-source reliability
-print(finder.get_source_registry().summary())
-```
-
-### Real-Time Health Checking
-
-```python
-finder = V2RayServerFinder(
-    realtime_health_check=True,
-    health_enable_google_204=True,
-    health_enable_http_check=True,
-    health_timeout=5.0,
-)
-servers = finder.get_all_servers()
-print(f"Live servers: {len(servers)}")
-```
-
-### Batch Health Checking
-
-```python
-servers = finder.get_servers_with_health(
-    check_health=True,
-    health_timeout=5.0,
-    min_quality_score=60.0,
-    filter_unhealthy=True,
-)
-for s in servers[:10]:
-    print(f"{s['protocol']:8s} | Q:{s['quality_score']:5.1f} | {s['latency_ms']:6.1f}ms")
 ```
 
 ### Basic Usage
 
 ```python
 finder = V2RayServerFinder()
-servers = finder.get_all_servers()                          # curated sources
-servers = finder.get_all_servers(use_github_search=True)    # + GitHub search
+servers = finder.get_all_servers()
+servers = finder.get_all_servers(use_github_search=True)
 count, filename = finder.save_to_file(filename="servers.txt", limit=200)
 ```
 
 ---
 
-## ⚡ CLI Usage / استفاده از CLI
+## ⚡ CLI Usage
 
 ```bash
 export GITHUB_TOKEN="ghp_your_token_here"
@@ -226,23 +211,15 @@ export GITHUB_TOKEN="ghp_your_token_here"
 v2ray-finder                          # Interactive TUI
 v2ray-finder -o servers.txt           # Quick save
 v2ray-finder -s -l 200 -o servers.txt # GitHub search + limit
-v2ray-finder --stats-only             # Stats only
 v2ray-finder -c --min-quality 60 -o healthy_servers.txt
 ```
 
 ---
 
-## ⛔ Graceful Interruption
-
-**Press Ctrl+C at any time** during fetch operations to stop and save partial results.
-
----
-
-## 🤝 Contributing / مشارکت
+## 🤝 Contributing
 
 ```bash
 pytest tests/ -v
-# Format and lint — must pass before committing
 black --target-version py38 . && isort . && flake8 src/
 ```
 
@@ -263,7 +240,7 @@ MIT License © 2026 Ali Sadeghi Aghili
 
 ---
 
-## 🙏 Acknowledgments / تشکرات
+## 🙏 Acknowledgments
 
 - [ebrasha/free-v2ray-public-list](https://github.com/ebrasha/free-v2ray-public-list)
 - [barry-far/V2ray-Config](https://github.com/barry-far/V2ray-Config)
