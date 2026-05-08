@@ -4,6 +4,12 @@ Combines multiple signal dimensions into a single ``total`` score (0.0-1.0)
 so callers can rank servers by overall quality.
 
 Part of the multi-source ingestion pipeline (closes #4 roadmap, faz 4).
+
+.. note:: ``google_204_ok`` weight is intentionally zero until the xray
+   integration layer is complete.  Until traffic is actually routed
+   *through* a server, a passing Google-204 check only tells us the
+   CI runner has internet access — not that the proxy works.  The
+   weight will be restored (and the helper re-wired) in the xray PR.
 """
 
 from __future__ import annotations
@@ -97,13 +103,29 @@ def _latency_to_score(latency_ms: Optional[float]) -> float:
 
 
 def _reachability_to_score(tcp_ok: bool, http_ok: bool, google_204_ok: bool) -> float:
+    """Compute reachability sub-score (0.0 – 1.0).
+
+    Weights used here:
+
+    * ``tcp_ok``      — 0.70  (raw socket connect; the only reliable signal we
+                               have until xray integration arrives)
+    * ``http_ok``     — 0.30  (HTTP-level handshake to the server's own port;
+                               SSL/TLS errors count as reachable)
+    * ``google_204_ok`` — 0.00  (deliberately zero for now: until traffic is
+                               routed *through* the proxy via xray, this flag
+                               only reflects the runner's own connectivity and
+                               would introduce a systematic upward bias)
+
+    These weights will be rebalanced when xray integration is complete.
+    """
     score = 0.0
     if tcp_ok:
-        score += 0.30
+        score += 0.70
     if http_ok:
-        score += 0.20
-    if google_204_ok:
-        score += 0.50
+        score += 0.30
+    # google_204_ok intentionally carries zero weight until xray integration.
+    # Do NOT add a branch here before that work is done.
+    _ = google_204_ok  # kept in signature for forward-compat
     return round(score, 4)
 
 

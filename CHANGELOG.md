@@ -4,6 +4,34 @@ All notable changes to v2ray-finder will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — xray integration (in progress)
+
+### Changed
+- `scorer.py` — `google_204_ok` weight set to **zero** until xray
+  integration is complete.  Previously this flag reflected the CI
+  runner's own connectivity (not the proxy), causing a systematic
+  upward scoring bias on dead servers.  `tcp_ok` weight raised from
+  0.30 → 0.70; `http_ok` unchanged at 0.30.
+
+### Added
+- `xray_runner.py` — **Layer 1** of the real connectivity checker.
+  `XrayBinaryManager` handles:
+  - Binary discovery (PATH → common install dirs → cached download)
+  - Auto-download of the latest release from `XTLS/Xray-core` GitHub
+    releases when `auto_download=True` (stdlib-only, no new deps)
+  - Platform / architecture detection (linux-64, linux-arm64-v8a,
+    macos-64, windows-64, …)
+  - Version reporting via `get_version()` / `is_available()`
+  - Async context-manager `run(config_path, socks_port)` that starts
+    xray, waits for the startup confirmation line, yields the process,
+    and **guarantees termination** on exit (even on exception)
+
+  **Layer 2** (ConfigAdapter — vmess/vless/trojan/ss → xray JSON) and
+  **Layer 3** (RealConnectivityChecker — HTTP probe through SOCKS5
+  proxy, re-wired `google_204_ok`) are in the next PR.
+
+---
+
 ## [0.4.0] - 2026-05-08
 
 ### Added — Multi-Source Ingestion Pipeline (closes #4)
@@ -102,7 +130,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Graceful stop / Ctrl+C handling** — complete overhaul across all layers:
   - `core.py`: `try/except KeyboardInterrupt` in all fetch loops, partial results preserved
   - `cli.py`: `StopController` with `threading.Event`, menu loop fixed
-  - `cli_rich.py`: `_signal_handler()` now calls `request_stop()`, partial snapshots after every step
+  - `cli_rich.py`: `_signal_handler()` now calls `request_stop()`, partial snapshots after interrupt
   - `get_servers_with_health()`: `health_batch_size` param, stop checked between batches
 
 ### Tests
@@ -144,15 +172,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 | Metric | Value |
 |--------|-------|
-| Source Lines | ~5,000+ |
+| Source Lines | ~5,500+ |
 | Test Files | 8 |
 | Test Coverage | ~80% |
 | Supported Protocols | 5 (vmess, vless, trojan, ss, ssr) |
-| Health Check Methods | 3 (TCP, HTTP, Google 204) |
+| Health Check Methods | 3 (TCP, HTTP, Google 204*) |
 | Curated Sources | 32 (up from 3) |
 | Interfaces | 3 (Python API, CLI, GUI) |
 | Python Versions | 3.8 – 3.12 |
 | Platforms | Linux, macOS, Windows |
+
+*Google 204 weight temporarily zero pending xray integration.
 
 ---
 
