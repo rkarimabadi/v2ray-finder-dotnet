@@ -37,7 +37,10 @@ jobs:
     - name: Check formatting with black (hard failure)
       run: |
         echo "Checking black formatting..."
-        black --check --diff --target-version py311 src/ tests/
+        # --target-version py38 matches [tool.black] in pyproject.toml.
+        # This ensures the safety-check AST parse runs against 3.8 syntax,
+        # which Python 3.11 (the runner) can always handle.
+        black --check --diff --target-version py38 src/ tests/
 
     - name: Check import sorting with isort (hard failure)
       run: |

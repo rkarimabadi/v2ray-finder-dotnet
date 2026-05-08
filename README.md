@@ -122,14 +122,15 @@ print(f"Live servers: {len(servers)}")
 - 🛡️ **Robust error handling**: Detailed exception hierarchy
 - 📈 **Rate limit tracking**: Monitor GitHub API usage
 - 🔒 **Secure token handling**: Environment variable support
-- 🧪 **80% test coverage**: Comprehensive test suite
+- 🧪 **~80% test coverage** (target: 90%)
 - ✅ **CI/CD**: Automated testing and deployment
+- 🐍 **Python 3.8 – 3.14** fully supported
 
 ---
 
 ## 📋 Requirements / پیش‌نیازها
 
-- **Python** ≥ 3.8
+- **Python** 3.8 – 3.14
 - **Internet connection**
 - **Optional**: aiohttp/httpx (async + health checks), diskcache (caching), PySide6 (GUI)
 
@@ -241,7 +242,8 @@ v2ray-finder -c --min-quality 60 -o healthy_servers.txt
 
 ```bash
 pytest tests/ -v
-black . && isort . && flake8 src/
+# Format and lint — must pass before committing
+black --target-version py38 . && isort . && flake8 src/
 ```
 
 ---
