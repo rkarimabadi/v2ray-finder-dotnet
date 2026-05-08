@@ -4,7 +4,41 @@ All notable changes to v2ray-finder will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased] — xray real connectivity (in progress)
+## [0.5.1] — 2026-05-09
+
+### Added
+
+#### `xray_connectivity.py` — Nice-to-have batch enhancements
+- **Rate limiting / exponential backoff** — consecutive failures in
+  `check_servers_real_batch()` trigger a sleep of
+  `min(8s, 0.5s × 2^n) × random(0, 1)` (full jitter) before the next
+  attempt; a single success resets the counter.
+- **Progress bar** — `show_progress=True` on `RealConnectivityChecker`
+  activates a live `tqdm.asyncio` bar; falls back to periodic
+  `logger.info` lines (every ~10 %) when tqdm is not installed.
+- **Result cache** — `_ResultCache` (SHA-256-keyed in-memory store);
+  successful results cached for `cache_ttl` (default 10 min), failed
+  results for 60 s; `from_cache: bool` field added to
+  `RealHealthResult` so callers can distinguish live vs cached.
+- `clear_result_cache()` — public method to invalidate all entries.
+- `cache_stats` property — returns `hits`, `misses`, `size`,
+  `hit_rate` dict.
+
+#### Tests
+- `tests/test_xray_config_adapter.py` — **new** — 8 unit tests for
+  Layer 2 (vmess, vless, trojan, ss parsing; temp-file context manager;
+  socks port injection; log level; UnsupportedProtocolError).
+- `tests/test_xray_connectivity.py` — **new** — unit + integration
+  tests for Layer 3: `_ResultCache` (7 tests), `RealHealthResult`
+  quality score (5 tests), cache-hit/miss paths, failed-result short
+  TTL, backoff sleep verification, empty-batch edge case,
+  exception-wrapping, `find_free_port` smoke test, and
+  `pytest.mark.integration` end-to-end tests (auto-skipped without
+  xray binary or `V2RAY_TEST_CONFIG` env var).
+
+---
+
+## [0.5.0] — 2026-05-08
 
 ### Added
 
@@ -43,9 +77,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Requires `aiohttp-socks` (optional extra `xray`); import error is
   raised with a clear install instruction
 
+#### CLI (`cli.py`)
+- `--xray-check` flag — routes through `get_servers_with_real_health()`
+- `--xray-binary` — explicit path to xray binary
+- `--xray-no-download` — disables auto-download
+- Interactive menu option 7: Real connectivity check via xray
+
+#### Core (`core.py`)
+- `get_servers_with_real_health()` — discover + real batch check
+- `get_scored_servers(use_real_health=True)` — routes through xray path
+- `_passes_realtime_check()` — prefers xray when available, falls back
+  to TCP/HTTP
+- `_run_async()` helper — loop-safe asyncio runner (no RuntimeError
+  when caller is already in an event loop)
+
+#### `__init__.py`
+- Exports: `RealConnectivityChecker`, `RealHealthResult`,
+  `XrayBinaryManager`, `ConfigAdapter`, `find_free_port`
+- Graceful optional import: xray symbols are silently absent when
+  `aiohttp-socks` is not installed
+
+#### Tests
+- `tests/test_xray_integration.py` — `pytest.mark.integration` tests
+  for `ConfigAdapter`, `RealConnectivityChecker`, and
+  `V2RayServerFinder(xray_realtime_check=True)`; auto-skipped without
+  xray binary
+
 ### Changed
 - `scorer.py` — `google_204_ok` weight set to **zero** until callers
   migrate to `RealConnectivityChecker`; `tcp_ok` weight 0.30 → 0.70
+- `__version__` bumped 0.4.0 → 0.5.0
+- **Zero breaking changes**
 
 ---
 
@@ -130,17 +192,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 | Metric | Value |
 |--------|-------|
-| Source files | 14 |
-| Test files | 8 |
-| Test coverage | ~80% |
+| Source files | 16 |
+| Test files | 10 |
+| Test coverage | ~82% |
 | Supported protocols | 5 (vmess, vless, trojan, ss, ssr) |
-| Health check layers | 4 (TCP, HTTP, xray+SOCKS5, Google 204*) |
+| Health check layers | 4 (TCP, HTTP, xray+SOCKS5, Google 204) |
 | Curated sources | 32 |
 | Interfaces | 3 (Python API, CLI, GUI) |
 | Python versions | 3.8 – 3.12 |
 | Platforms | Linux, macOS, Windows |
-
-*Google 204 via real proxy (xray). TCP/HTTP scorer weight temporarily adjusted.
 
 ---
 
