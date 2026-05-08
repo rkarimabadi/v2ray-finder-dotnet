@@ -135,11 +135,13 @@ class V2RayServerFinder:
                 logger.info(f"GitHub token configured from {self._token_source}")
             else:
                 logger.warning(
-                    "Invalid token format - proceeding without authentication (rate limit: 60/hour)"
+                    "Invalid token format - proceeding without authentication"
+                    " (rate limit: 60/hour)"
                 )
         else:
             logger.info(
-                "No GitHub token provided - using unauthenticated access (rate limit: 60/hour)"
+                "No GitHub token provided - using unauthenticated access"
+                " (rate limit: 60/hour)"
             )
 
     # ------------------------------------------------------------------
@@ -151,6 +153,7 @@ class V2RayServerFinder:
         if self._health_checker is None:
             try:
                 from .health_checker import HealthChecker
+
                 self._health_checker = HealthChecker(
                     timeout=self._health_timeout,
                     concurrent_limit=self._health_concurrent_limit,
@@ -158,7 +161,9 @@ class V2RayServerFinder:
                     enable_http_check=self._health_enable_http_check,
                 )
             except ImportError:
-                logger.warning("health_checker module not available; skipping health checks")
+                logger.warning(
+                    "health_checker module not available; skipping health checks"
+                )
         return self._health_checker
 
     def _passes_realtime_check(self, config: str) -> bool:
@@ -217,24 +222,28 @@ class V2RayServerFinder:
             return None
         if len(token) < 20:
             logger.error(
-                f"Token too short ({len(token)} chars). GitHub tokens are typically 40+ characters."
+                f"Token too short ({len(token)} chars)."
+                " GitHub tokens are typically 40+ characters."
             )
             return None
         if not re.match(r"^[a-zA-Z0-9_]+$", token):
             logger.error(
-                "Token contains invalid characters. GitHub tokens should be alphanumeric."
+                "Token contains invalid characters."
+                " GitHub tokens should be alphanumeric."
             )
             return None
         known_prefixes = ["ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"]
         has_known_prefix = any(token.startswith(prefix) for prefix in known_prefixes)
         if not has_known_prefix:
             logger.warning(
-                f"Token doesn't start with a known GitHub prefix ({', '.join(known_prefixes)}). "
+                f"Token doesn't start with a known GitHub prefix"
+                f" ({', '.join(known_prefixes)}). "
                 "This might be an old token format or invalid token."
             )
         token_preview = f"{token[:4]}...{token[-4:]}" if len(token) > 8 else "****"
         logger.debug(
-            f"Token validated: {token_preview} ({len(token)} chars, source: {self._token_source})"
+            f"Token validated: {token_preview}"
+            f" ({len(token)} chars, source: {self._token_source})"
         )
         return token
 
@@ -472,12 +481,15 @@ class V2RayServerFinder:
         except requests.exceptions.Timeout as e:
             error = TimeoutError(
                 f"Request timed out while fetching files from {repo_full_name}",
-                url=url, timeout=10.0,
+                url=url,
+                timeout=10.0,
             )
             logger.error(str(error))
             return Err(error)
         except requests.exceptions.ConnectionError as e:
-            error = NetworkError(f"Connection error while fetching files: {e}", url=url)
+            error = NetworkError(
+                f"Connection error while fetching files: {e}", url=url
+            )
             logger.error(str(error))
             return Err(error)
         except requests.exceptions.RequestException as e:
@@ -555,7 +567,9 @@ class V2RayServerFinder:
             return Ok(servers)
         except requests.exceptions.Timeout as e:
             error = TimeoutError(
-                f"Request timed out while fetching from {url}", url=url, timeout=timeout
+                f"Request timed out while fetching from {url}",
+                url=url,
+                timeout=timeout,
             )
             logger.error(str(error))
             self._source_registry.record_failure(url)
@@ -591,7 +605,9 @@ class V2RayServerFinder:
     # Generator-based discovery pipeline
     # ------------------------------------------------------------------
 
-    def _iter_raw_servers(self, use_github_search: bool = False) -> Generator[str, None, None]:
+    def _iter_raw_servers(
+        self, use_github_search: bool = False
+    ) -> Generator[str, None, None]:
         """Internal generator — yields raw server config strings as they are found."""
         seen: set = set()
 
@@ -623,7 +639,9 @@ class V2RayServerFinder:
             for keyword in search_keywords:
                 if self.should_stop():
                     return
-                repos_result = self.search_repos(keywords=[keyword, "v2ray"], max_results=10)
+                repos_result = self.search_repos(
+                    keywords=[keyword, "v2ray"], max_results=10
+                )
                 if repos_result.is_err():
                     if self.raise_errors:
                         raise repos_result.error
@@ -640,7 +658,9 @@ class V2RayServerFinder:
                         if self.should_stop():
                             return
                         if file["download_url"]:
-                            servers_result = self.get_servers_from_url(file["download_url"])
+                            servers_result = self.get_servers_from_url(
+                                file["download_url"]
+                            )
                             if servers_result.is_ok():
                                 for server in servers_result.unwrap():
                                     if self.should_stop():
@@ -670,7 +690,9 @@ class V2RayServerFinder:
                 yield server
             else:
                 logger.debug(f"Real-time health FAIL — dropped: {server[:60]}")
-        logger.info(f"Real-time health check complete: {passed}/{total} servers passed")
+        logger.info(
+            f"Real-time health check complete: {passed}/{total} servers passed"
+        )
 
     # ------------------------------------------------------------------
     # High-level discovery methods
@@ -690,7 +712,9 @@ class V2RayServerFinder:
             for keyword in search_keywords:
                 if self.should_stop():
                     break
-                repos_result = self.search_repos(keywords=[keyword, "v2ray"], max_results=max_repos)
+                repos_result = self.search_repos(
+                    keywords=[keyword, "v2ray"], max_results=max_repos
+                )
                 if repos_result.is_err():
                     errors.append(repos_result.error)
                     if self.raise_errors:
@@ -709,7 +733,9 @@ class V2RayServerFinder:
                         if self.should_stop():
                             break
                         if file["download_url"]:
-                            servers_result = self.get_servers_from_url(file["download_url"])
+                            servers_result = self.get_servers_from_url(
+                                file["download_url"]
+                            )
                             if servers_result.is_ok():
                                 all_servers.extend(servers_result.unwrap())
                             else:
@@ -718,7 +744,8 @@ class V2RayServerFinder:
                                     raise servers_result.error
         except KeyboardInterrupt:
             logger.info(
-                f"GitHub search interrupted via Ctrl+C — returning {len(all_servers)} partial results"
+                f"GitHub search interrupted via Ctrl+C —"
+                f" returning {len(all_servers)} partial results"
             )
             self.request_stop()
 
@@ -744,7 +771,8 @@ class V2RayServerFinder:
                         raise result.error
         except KeyboardInterrupt:
             logger.info(
-                f"Known sources fetch interrupted via Ctrl+C — returning {len(all_servers)} partial results"
+                f"Known sources fetch interrupted via Ctrl+C —"
+                f" returning {len(all_servers)} partial results"
             )
             self.request_stop()
 
@@ -766,7 +794,9 @@ class V2RayServerFinder:
         health-checked immediately as it is discovered.
         """
         if self.realtime_health_check:
-            logger.info("Real-time health check enabled — filtering servers during discovery")
+            logger.info(
+                "Real-time health check enabled — filtering servers during discovery"
+            )
             return list(
                 self._iter_servers_with_realtime_health(
                     use_github_search=use_github_search
@@ -818,7 +848,9 @@ class V2RayServerFinder:
             return [
                 {
                     "config": server,
-                    "protocol": server.split("://")[0] if "://" in server else "unknown",
+                    "protocol": (
+                        server.split("://")[0] if "://" in server else "unknown"
+                    ),
                     "health_checked": False,
                 }
                 for server in servers
@@ -831,11 +863,15 @@ class V2RayServerFinder:
                 sort_by_quality,
             )
         except ImportError:
-            logger.warning("Health checker not available, returning servers without health info")
+            logger.warning(
+                "Health checker not available, returning servers without health info"
+            )
             return [
                 {
                     "config": server,
-                    "protocol": server.split("://")[0] if "://" in server else "unknown",
+                    "protocol": (
+                        server.split("://")[0] if "://" in server else "unknown"
+                    ),
                     "health_checked": False,
                 }
                 for server in servers
@@ -853,18 +889,25 @@ class V2RayServerFinder:
             enable_http_check=self._health_enable_http_check,
         )
 
-        logger.info(f"Batch health checking {len(server_tuples)} servers (batch_size={health_batch_size})...")
+        logger.info(
+            f"Batch health checking {len(server_tuples)} servers"
+            f" (batch_size={health_batch_size})..."
+        )
         health_results = []
         try:
             for i in range(0, len(server_tuples), health_batch_size):
                 if self.should_stop():
-                    logger.info(f"Health check stopped by user after {len(health_results)} servers")
+                    logger.info(
+                        f"Health check stopped by user after {len(health_results)} servers"
+                    )
                     break
-                batch = server_tuples[i: i + health_batch_size]
+                batch = server_tuples[i : i + health_batch_size]
                 batch_results = checker.check_servers(batch)
                 health_results.extend(batch_results)
         except KeyboardInterrupt:
-            logger.info(f"Health check interrupted via Ctrl+C after {len(health_results)} servers")
+            logger.info(
+                f"Health check interrupted via Ctrl+C after {len(health_results)} servers"
+            )
             self.request_stop()
 
         if filter_unhealthy or min_quality_score > 0:
@@ -922,7 +965,10 @@ class V2RayServerFinder:
             if self.should_stop():
                 break
             try:
-                result = self.search_repos(keywords=[topic, "v2ray"], max_results=max_repos_per_topic * 2)
+                result = self.search_repos(
+                    keywords=[topic, "v2ray"],
+                    max_results=max_repos_per_topic * 2,
+                )
                 if result.is_err():
                     continue
                 for repo in result.unwrap()[:max_repos_per_topic]:
@@ -986,19 +1032,27 @@ class V2RayServerFinder:
             concurrent_checks=concurrent_checks,
         )
         trust_map = {s.url: s.trust.value for s in STATIC_SOURCES}
-        overlap_map = {s.url: s.overlap_ratio for s in self._source_registry.all_stats()}
-        scored = score_servers(health_results, source_trust_map=trust_map, overlap_map=overlap_map)
+        overlap_map = {
+            s.url: s.overlap_ratio for s in self._source_registry.all_stats()
+        }
+        scored = score_servers(
+            health_results, source_trust_map=trust_map, overlap_map=overlap_map
+        )
 
         result_list = []
         for sc in scored:
             if sc.total < min_score:
                 continue
-            base = next((h for h in health_results if h.get("config") == sc.config), {})
+            base = next(
+                (h for h in health_results if h.get("config") == sc.config), {}
+            )
             merged = dict(base)
             merged.update({"score": sc, "total_score": sc.total, "grade": sc.grade})
             result_list.append(merged)
 
-        logger.info(f"get_scored_servers: {len(result_list)} servers (min_score={min_score})")
+        logger.info(
+            f"get_scored_servers: {len(result_list)} servers (min_score={min_score})"
+        )
         return result_list
 
     # ------------------------------------------------------------------
