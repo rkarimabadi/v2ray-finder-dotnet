@@ -101,9 +101,10 @@ def test_get_servers_with_health_full_flow_returns_formatted_results(finder):
     mock_health = _make_mock_health()
     hc_mod = _make_hc_module([mock_health])
 
-    with patch.object(
-        finder, "get_all_servers", return_value=["vmess://test"]
-    ), patch.dict(sys.modules, {"v2ray_finder.health_checker": hc_mod}):
+    with (
+        patch.object(finder, "get_all_servers", return_value=["vmess://test"]),
+        patch.dict(sys.modules, {"v2ray_finder.health_checker": hc_mod}),
+    ):
         result = finder.get_servers_with_health(check_health=True)
 
     assert len(result) == 1
@@ -120,9 +121,10 @@ def test_get_servers_with_health_filter_unhealthy_calls_filter(finder):
     mock_health = _make_mock_health()
     hc_mod = _make_hc_module([mock_health])
 
-    with patch.object(
-        finder, "get_all_servers", return_value=["vmess://test"]
-    ), patch.dict(sys.modules, {"v2ray_finder.health_checker": hc_mod}):
+    with (
+        patch.object(finder, "get_all_servers", return_value=["vmess://test"]),
+        patch.dict(sys.modules, {"v2ray_finder.health_checker": hc_mod}),
+    ):
         finder.get_servers_with_health(check_health=True, filter_unhealthy=True)
 
     hc_mod.filter_healthy_servers.assert_called_once()
@@ -133,9 +135,10 @@ def test_get_servers_with_health_min_quality_calls_filter(finder):
     mock_health = _make_mock_health()
     hc_mod = _make_hc_module([mock_health])
 
-    with patch.object(
-        finder, "get_all_servers", return_value=["vmess://test"]
-    ), patch.dict(sys.modules, {"v2ray_finder.health_checker": hc_mod}):
+    with (
+        patch.object(finder, "get_all_servers", return_value=["vmess://test"]),
+        patch.dict(sys.modules, {"v2ray_finder.health_checker": hc_mod}),
+    ):
         finder.get_servers_with_health(check_health=True, min_quality_score=50.0)
 
     hc_mod.filter_healthy_servers.assert_called_once()
@@ -145,8 +148,9 @@ def test_get_servers_with_health_empty_server_list(finder):
     """Empty server list must short-circuit HealthChecker (no check_servers call)."""
     hc_mod = _make_hc_module([])
 
-    with patch.object(finder, "get_all_servers", return_value=[]), patch.dict(
-        sys.modules, {"v2ray_finder.health_checker": hc_mod}
+    with (
+        patch.object(finder, "get_all_servers", return_value=[]),
+        patch.dict(sys.modules, {"v2ray_finder.health_checker": hc_mod}),
     ):
         result = finder.get_servers_with_health(check_health=True)
 

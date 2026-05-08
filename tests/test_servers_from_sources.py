@@ -95,10 +95,13 @@ def test_get_servers_from_github_file_error_skips_repo(finder):
     """When get_repo_files fails for a repo, it is skipped gracefully."""
     repos = [{"name": "repo1", "full_name": "user/repo1"}]
 
-    with patch.object(finder, "search_repos", return_value=Ok(repos)), patch.object(
-        finder,
-        "get_repo_files",
-        return_value=Err(GitHubAPIError("files failed")),
+    with (
+        patch.object(finder, "search_repos", return_value=Ok(repos)),
+        patch.object(
+            finder,
+            "get_repo_files",
+            return_value=Err(GitHubAPIError("files failed")),
+        ),
     ):
         servers = finder.get_servers_from_github(search_keywords=["v2ray"])
 
@@ -110,12 +113,14 @@ def test_get_servers_from_github_download_error_skips_file(finder):
     repos = [{"name": "repo1", "full_name": "user/repo1"}]
     files = [{"name": "sub.txt", "download_url": "https://example.com/sub.txt"}]
 
-    with patch.object(finder, "search_repos", return_value=Ok(repos)), patch.object(
-        finder, "get_repo_files", return_value=Ok(files)
-    ), patch.object(
-        finder,
-        "get_servers_from_url",
-        return_value=Err(NetworkError("download failed")),
+    with (
+        patch.object(finder, "search_repos", return_value=Ok(repos)),
+        patch.object(finder, "get_repo_files", return_value=Ok(files)),
+        patch.object(
+            finder,
+            "get_servers_from_url",
+            return_value=Err(NetworkError("download failed")),
+        ),
     ):
         servers = finder.get_servers_from_github(search_keywords=["v2ray"])
 
@@ -128,9 +133,11 @@ def test_get_servers_from_github_happy_path(finder):
     files = [{"name": "sub.txt", "download_url": "https://example.com/sub.txt"}]
     servers_found = ["vmess://config1", "vless://config2"]
 
-    with patch.object(finder, "search_repos", return_value=Ok(repos)), patch.object(
-        finder, "get_repo_files", return_value=Ok(files)
-    ), patch.object(finder, "get_servers_from_url", return_value=Ok(servers_found)):
+    with (
+        patch.object(finder, "search_repos", return_value=Ok(repos)),
+        patch.object(finder, "get_repo_files", return_value=Ok(files)),
+        patch.object(finder, "get_servers_from_url", return_value=Ok(servers_found)),
+    ):
         result = finder.get_servers_from_github(search_keywords=["v2ray"])
 
     assert "vmess://config1" in result
@@ -154,9 +161,12 @@ def test_get_servers_from_github_file_without_download_url_skipped(finder):
     repos = [{"name": "repo1", "full_name": "user/repo1"}]
     files = [{"name": "sub.txt", "download_url": None}]  # no download URL
 
-    with patch.object(finder, "search_repos", return_value=Ok(repos)), patch.object(
-        finder, "get_repo_files", return_value=Ok(files)
-    ) as mock_url_fetch:
+    with (
+        patch.object(finder, "search_repos", return_value=Ok(repos)),
+        patch.object(
+            finder, "get_repo_files", return_value=Ok(files)
+        ) as mock_url_fetch,
+    ):
         result = finder.get_servers_from_github(search_keywords=["v2ray"])
 
     assert result == []

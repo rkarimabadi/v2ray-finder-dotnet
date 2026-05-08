@@ -80,9 +80,7 @@ def _parse_vmess(
         tls = str(data.get("tls") or "").lower() in ("tls", "reality", "xtls")
         if not host or not port:
             return None
-        extra = {
-            k: v for k, v in data.items() if k not in ("add", "port", "id", "tls")
-        }
+        extra = {k: v for k, v in data.items() if k not in ("add", "port", "id", "tls")}
         return NormalizedServer(
             raw_config=config,
             protocol="vmess",
