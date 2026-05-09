@@ -63,9 +63,7 @@ class StopController:
         self._active.clear()
 
 
-def print_stats(
-    servers, show_health: bool = False, show_xray: bool = False
-) -> None:
+def print_stats(servers, show_health: bool = False, show_xray: bool = False) -> None:
     """Print statistics about fetched servers."""
     if not servers:
         print("No servers found.")
@@ -87,9 +85,7 @@ def print_stats(
     if show_health and servers and isinstance(servers[0], dict):
         healthy = sum(1 for s in servers if s.get("health_status") == "healthy")
         degraded = sum(1 for s in servers if s.get("health_status") == "degraded")
-        unreachable = sum(
-            1 for s in servers if s.get("health_status") == "unreachable"
-        )
+        unreachable = sum(1 for s in servers if s.get("health_status") == "unreachable")
         invalid = sum(1 for s in servers if s.get("health_status") == "invalid")
         print("\nHealth status:")
         print(f"  Healthy: {healthy}")
@@ -124,11 +120,7 @@ def print_stats(
         print(f"  Google 204 OK:     {g204}/{len(servers)}")
         if reachable > 0:
             avg_lat = (
-                sum(
-                    s.get("latency_ms") or 0
-                    for s in servers
-                    if s.get("reachable")
-                )
+                sum(s.get("latency_ms") or 0 for s in servers if s.get("reachable"))
                 / reachable
             )
             print(f"  Avg real latency:  {avg_lat:.1f}ms")
@@ -244,9 +236,7 @@ def interactive_menu(finder: V2RayServerFinder) -> None:
 
         elif choice == "3":
             try:
-                use_search = (
-                    input("Use GitHub search? (y/n): ").strip().lower() == "y"
-                )
+                use_search = input("Use GitHub search? (y/n): ").strip().lower() == "y"
             except (KeyboardInterrupt, EOFError):
                 continue
             print("\nFetching and checking server health (TCP/HTTP)...")
@@ -270,9 +260,7 @@ def interactive_menu(finder: V2RayServerFinder) -> None:
             print_stats(servers, show_health=True)
             if servers:
                 try:
-                    show_top = (
-                        input("\nShow top 10 by quality? (y/n): ").strip().lower()
-                    )
+                    show_top = input("\nShow top 10 by quality? (y/n): ").strip().lower()
                 except (KeyboardInterrupt, EOFError):
                     show_top = "n"
                 if show_top == "y":
@@ -293,9 +281,7 @@ def interactive_menu(finder: V2RayServerFinder) -> None:
                     input("Enter filename (default: v2ray_servers.txt): ").strip()
                     or "v2ray_servers.txt"
                 )
-                use_search = (
-                    input("Use GitHub search? (y/n): ").strip().lower() == "y"
-                )
+                use_search = input("Use GitHub search? (y/n): ").strip().lower() == "y"
                 check_health = (
                     input("Check server health? (y/n): ").strip().lower() == "y"
                 )
@@ -339,9 +325,7 @@ def interactive_menu(finder: V2RayServerFinder) -> None:
 
         elif choice == "5":
             try:
-                use_search = (
-                    input("Use GitHub search? (y/n): ").strip().lower() == "y"
-                )
+                use_search = input("Use GitHub search? (y/n): ").strip().lower() == "y"
                 check_health = (
                     input("Check server health? (y/n): ").strip().lower() == "y"
                 )
@@ -387,9 +371,7 @@ def interactive_menu(finder: V2RayServerFinder) -> None:
 
         elif choice == "7":
             try:
-                use_search = (
-                    input("Use GitHub search? (y/n): ").strip().lower() == "y"
-                )
+                use_search = input("Use GitHub search? (y/n): ").strip().lower() == "y"
                 limit_str = input("Limit servers to check (0 for all): ").strip()
             except (KeyboardInterrupt, EOFError):
                 continue
@@ -496,11 +478,7 @@ def main() -> None:
         token = token_from_env
         if not args.quiet:
             print("[i] Using GitHub token from GITHUB_TOKEN environment variable")
-    elif (
-        not token
-        and not args.prompt_token
-        and not any([args.output, args.stats_only])
-    ):
+    elif not token and not args.prompt_token and not any([args.output, args.stats_only]):
         token = prompt_for_token()
 
     finder = V2RayServerFinder(token=token)
@@ -607,8 +585,10 @@ def main() -> None:
         return
 
     if args.output:
-        if (args.check_health or args.xray_check) and servers and isinstance(
-            servers[0], dict
+        if (
+            (args.check_health or args.xray_check)
+            and servers
+            and isinstance(servers[0], dict)
         ):
             output_servers: List[str] = [s["config"] for s in servers]
         else:
