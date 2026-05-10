@@ -8,11 +8,82 @@ so that other tools (xray_connectivity.py) can route HTTP through it.
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import logging
-from typing import Any, Dict, Optional
+import os
+import tempfile
+from typing import Any, Dict, Iterator, Optional
 
 logger = logging.getLogger(__name__)
+
+
+class UnsupportedProtocolError(ValueError):
+    """Raised when a URI scheme is not supported by the config adapter."""
+
+    def __init__(self, scheme: str) -> None:
+        self.scheme = scheme
+        super().__init__(f"Unsupported protocol: {scheme!r}")
+
+
+class ConfigAdapter:
+    """Convert proxy URI strings to xray JSON config dicts.
+
+    Example::
+
+        adapter = ConfigAdapter()
+        cfg = adapter.build_config(uri, socks_port=10808)
+
+        # Or as a context manager that writes/cleans up a temp file:
+        with adapter.build_config_file(uri, socks_port=10808) as path:
+            subprocess.run(["xray", "run", "-c", path])
+    """
+
+    SUPPORTED = frozenset({"vmess", "vless", "trojan", "ss"})
+
+    def build_config(self, uri: str, socks_port: int = 10808) -> Dict[str, Any]:
+        """Convert *uri* to an xray config dict.
+
+        Raises:
+            UnsupportedProtocolError: if the URI scheme is not supported.
+            ValueError: if the URI cannot be parsed.
+        """
+        uri = uri.strip()
+        if "://" not in uri:
+            raise ValueError(f"Not a valid URI: {uri[:40]!r}")
+
+        scheme = uri.split("://")[0].lower()
+        if scheme not in self.SUPPORTED:
+            raise UnsupportedProtocolError(scheme)
+
+        cfg = config_to_xray(uri, local_port=socks_port)
+        if cfg is None:
+            raise ValueError(f"Failed to parse URI: {uri[:60]!r}")
+        return cfg
+
+    @contextlib.contextmanager
+    def build_config_file(
+        self, uri: str, socks_port: int = 10808
+    ) -> Iterator[str]:
+        """Context manager that writes the xray config to a temp file.
+
+        Yields the file path; cleans up on exit.
+
+        Raises:
+            UnsupportedProtocolError: if the URI scheme is not supported.
+            ValueError: if the URI cannot be parsed.
+        """
+        cfg = self.build_config(uri, socks_port=socks_port)
+        fd, path = tempfile.mkstemp(suffix=".json", prefix="xray_cfg_")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                json.dump(cfg, fh)
+            yield path
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
 def _decode_vmess(uri_body: str) -> Optional[Dict[str, Any]]:
@@ -57,7 +128,6 @@ def vmess_to_xray(uri: str, local_port: int = 10808) -> Optional[Dict]:
     if data is None:
         return None
 
-    tls_settings: Dict = {}
     stream_settings: Dict = {
         "network": data.get("net", "tcp"),
         "security": data.get("tls", "none"),
@@ -216,14 +286,11 @@ def ss_to_xray(uri: str, local_port: int = 10808) -> Optional[Dict]:
     import base64
 
     try:
-        # ss://BASE64(method:password)@host:port#tag
-        # OR ss://method:password@host:port
         parsed = urlparse(uri)
         host = parsed.hostname or ""
         port = parsed.port or 8388
 
         if parsed.username and not parsed.password:
-            # Old-style: ss://base64@host:port
             padded = parsed.username + "==" * (4 - len(parsed.username) % 4)
             user_info = base64.b64decode(padded).decode("utf-8", errors="replace")
             method, password = user_info.split(":", 1)

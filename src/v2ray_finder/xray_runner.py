@@ -26,7 +26,7 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import urllib.request
 
@@ -34,6 +34,22 @@ logger = logging.getLogger(__name__)
 
 _XRAY_GITHUB = "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 _STARTUP_TIMEOUT = 5.0  # seconds to wait for SOCKS5 port to open
+
+# Common directories where xray binary might already be installed
+_COMMON_INSTALL_DIRS: List[str] = [
+    "/usr/local/bin",
+    "/usr/bin",
+    "/opt/homebrew/bin",
+    str(Path.home() / ".local" / "bin"),
+    str(Path.home() / "bin"),
+]
+
+
+class XrayBinaryNotFoundError(FileNotFoundError):
+    """Raised when the xray binary cannot be located or downloaded."""
+
+    def __init__(self, message: str = "xray binary not found") -> None:
+        super().__init__(message)
 
 
 def _cache_dir() -> Path:
@@ -84,6 +100,11 @@ def find_xray_binary(extra_path: Optional[str] = None) -> Optional[str]:
     found = shutil.which("xray")
     if found:
         return found
+    # Also check common install dirs
+    for d in _COMMON_INSTALL_DIRS:
+        candidate = Path(d) / _binary_name()
+        if candidate.is_file():
+            return str(candidate)
     cached = _cache_dir() / _binary_name()
     if cached.is_file():
         return str(cached)
@@ -169,8 +190,39 @@ class XrayRunner:
         if self._auto_download:
             logger.info("xray binary not found — downloading...")
             return download_xray_binary()
-        raise RuntimeError(
+        raise XrayBinaryNotFoundError(
             "xray binary not found. Install xray or use auto_download=True."
+        )
+
+    def find_binary(self) -> Optional[str]:
+        """Return path to xray binary if found, else None."""
+        return find_xray_binary(self._binary_path)
+
+    def get_version(self) -> Optional[str]:
+        """Return xray version string, or None if binary not found."""
+        binary = self.find_binary()
+        if not binary:
+            return None
+        try:
+            result = subprocess.run(
+                [binary, "version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            first_line = result.stdout.strip().splitlines()[0] if result.stdout else ""
+            return first_line or None
+        except Exception:
+            return None
+
+    def is_available(self) -> bool:
+        """Return True if xray binary is available on this system."""
+        return self.find_binary() is not None
+
+    async def run(self, config: dict) -> None:  # type: ignore[override]
+        """Async context manager entry stub — use as sync context manager instead."""
+        raise NotImplementedError(
+            "Use XrayRunner as a sync context manager: `with runner: runner.start(cfg)`"
         )
 
     def start(self, config: dict) -> None:
@@ -180,6 +232,7 @@ class XrayRunner:
             config: xray JSON config dict (from xray_config_adapter).
 
         Raises:
+            XrayBinaryNotFoundError: If binary not found and auto_download is False.
             RuntimeError: If xray fails to start or the port does not open.
         """
         if self._process and self._process.poll() is None:
@@ -234,3 +287,7 @@ class XrayRunner:
 
     def __exit__(self, *args) -> None:
         self.stop()
+
+
+# Alias: tests expect XrayBinaryManager as the primary class name
+XrayBinaryManager = XrayRunner

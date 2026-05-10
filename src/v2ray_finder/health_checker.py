@@ -17,6 +17,7 @@ import socket
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Dict, List, Optional, Tuple
 from urllib.request import urlopen
 from urllib.error import URLError
@@ -27,6 +28,144 @@ logger = logging.getLogger(__name__)
 # Used as the ground-truth connectivity probe.
 _GOOGLE_204_URL = "http://clients3.google.com/generate_204"
 _GOOGLE_204_ALT = "http://connectivitycheck.gstatic.com/generate_204"
+
+
+class HealthStatus(Enum):
+    """Health status values for a server."""
+
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    UNREACHABLE = "unreachable"
+    INVALID = "invalid"
+
+
+@dataclass
+class ServerHealth:
+    """Health information for a single server config."""
+
+    config: str
+    host: str
+    port: int
+    protocol: str
+    status: HealthStatus = HealthStatus.UNREACHABLE
+    quality_score: float = 0.0
+    latency_ms: float = 0.0
+    tcp_ok: bool = False
+    error: Optional[str] = None
+
+    @property
+    def is_healthy(self) -> bool:
+        """Return True if status is HEALTHY or DEGRADED."""
+        return self.status in (HealthStatus.HEALTHY, HealthStatus.DEGRADED)
+
+    @property
+    def health_status(self) -> str:
+        """Return string representation of health status (compat shim)."""
+        return self.status.value
+
+
+class ServerValidator:
+    """Validate server configs before health checking."""
+
+    SUPPORTED_PROTOCOLS = {"vmess", "vless", "trojan", "ss", "ssr"}
+
+    @classmethod
+    def is_valid_uri(cls, config: str) -> bool:
+        """Return True if config looks like a valid proxy URI."""
+        if "://" not in config:
+            return False
+        scheme = config.split("://")[0].lower()
+        return scheme in cls.SUPPORTED_PROTOCOLS
+
+    @classmethod
+    def validate(cls, config: str) -> Tuple[bool, Optional[str]]:
+        """Return (is_valid, error_message)."""
+        if not config or not config.strip():
+            return False, "Empty config"
+        if not cls.is_valid_uri(config):
+            return False, f"Unsupported or missing URI scheme: {config[:30]}"
+        return True, None
+
+
+class HealthChecker:
+    """High-level health checker that runs TCP checks on server configs."""
+
+    def __init__(
+        self,
+        timeout: float = 5.0,
+        max_workers: int = 50,
+        check_google_204: bool = False,
+        min_quality_score: float = 0.0,
+    ) -> None:
+        self.timeout = timeout
+        self.max_workers = max_workers
+        self.check_google_204 = check_google_204
+        self.min_quality_score = min_quality_score
+
+    def check_one(self, config: str) -> ServerHealth:
+        """Run health check on a single config string."""
+        result = check_server(
+            config,
+            timeout=self.timeout,
+            check_google_204=self.check_google_204,
+        )
+        status_map = {
+            "healthy": HealthStatus.HEALTHY,
+            "degraded": HealthStatus.DEGRADED,
+            "unreachable": HealthStatus.UNREACHABLE,
+            "invalid": HealthStatus.INVALID,
+        }
+        return ServerHealth(
+            config=result.config,
+            host=result.host,
+            port=result.port,
+            protocol=result.protocol,
+            status=status_map.get(result.health_status, HealthStatus.UNREACHABLE),
+            quality_score=result.quality_score,
+            latency_ms=result.latency_ms,
+            tcp_ok=result.tcp_ok,
+            error=result.error,
+        )
+
+    def check_batch(self, configs: List[str]) -> List[ServerHealth]:
+        """Run health checks on a batch of configs."""
+        results = check_servers_batch(
+            configs,
+            timeout=self.timeout,
+            max_workers=self.max_workers,
+            check_google_204=self.check_google_204,
+            min_quality_score=self.min_quality_score,
+        )
+        status_map = {
+            "healthy": HealthStatus.HEALTHY,
+            "degraded": HealthStatus.DEGRADED,
+            "unreachable": HealthStatus.UNREACHABLE,
+            "invalid": HealthStatus.INVALID,
+        }
+        return [
+            ServerHealth(
+                config=r.config,
+                host=r.host,
+                port=r.port,
+                protocol=r.protocol,
+                status=status_map.get(r.health_status, HealthStatus.UNREACHABLE),
+                quality_score=r.quality_score,
+                latency_ms=r.latency_ms,
+                tcp_ok=r.tcp_ok,
+                error=r.error,
+            )
+            for r in results
+        ]
+
+
+def filter_healthy_servers(servers: List[ServerHealth]) -> List[ServerHealth]:
+    """Return only servers with HEALTHY or DEGRADED status."""
+    return [s for s in servers if s.is_healthy]
+
+
+def sort_by_quality(servers: List[ServerHealth]) -> List[ServerHealth]:
+    """Return servers sorted by quality_score descending (best first)."""
+    return sorted(servers, key=lambda s: s.quality_score, reverse=True)
 
 
 @dataclass

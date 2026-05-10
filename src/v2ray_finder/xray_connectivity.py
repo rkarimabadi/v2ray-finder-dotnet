@@ -10,12 +10,13 @@ For batch use, call :func:`check_real_connectivity_batch`.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import socket
 import struct
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from .xray_config_adapter import config_to_xray
@@ -38,6 +39,126 @@ class RealHealthResult:
     google_204_ok: bool = False
     latency_ms: float = 0.0
     error: Optional[str] = None
+
+
+class _ResultCache:
+    """Simple in-memory cache for connectivity check results."""
+
+    def __init__(self, ttl_seconds: float = 300.0) -> None:
+        self._ttl = ttl_seconds
+        self._cache: Dict[str, Tuple[RealHealthResult, float]] = {}
+
+    def get(self, key: str) -> Optional[RealHealthResult]:
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        result, timestamp = entry
+        if time.monotonic() - timestamp > self._ttl:
+            del self._cache[key]
+            return None
+        return result
+
+    def set(self, key: str, result: RealHealthResult) -> None:
+        self._cache[key] = (result, time.monotonic())
+
+    def clear(self) -> None:
+        self._cache.clear()
+
+    def __len__(self) -> int:
+        return len(self._cache)
+
+
+class RealConnectivityChecker:
+    """Check real internet connectivity through xray proxies.
+
+    Supports both sync and async (asyncio) usage::
+
+        checker = RealConnectivityChecker()
+
+        # Sync
+        result = checker.check_server_real(uri)
+
+        # Async
+        result = await checker.check_server_real_async(uri)
+
+        # Batch (async)
+        results = await checker.check_servers_real_batch([uri1, uri2])
+    """
+
+    def __init__(
+        self,
+        timeout: float = 10.0,
+        max_workers: int = 5,
+        local_port_base: int = 10900,
+        binary_path: Optional[str] = None,
+        auto_download: bool = True,
+        cache_ttl: float = 300.0,
+    ) -> None:
+        self.timeout = timeout
+        self.max_workers = max_workers
+        self.local_port_base = local_port_base
+        self.binary_path = binary_path
+        self.auto_download = auto_download
+        self._cache = _ResultCache(ttl_seconds=cache_ttl)
+        self._port_counter = local_port_base
+
+    def _next_port(self) -> int:
+        port = self._port_counter
+        self._port_counter += 1
+        return port
+
+    def check_server_real(self, uri: str, use_cache: bool = True) -> RealHealthResult:
+        """Synchronously check real connectivity for a single URI."""
+        if use_cache:
+            cached = self._cache.get(uri)
+            if cached is not None:
+                return cached
+
+        result = check_one(
+            uri,
+            local_port=self._next_port(),
+            timeout=self.timeout,
+            binary_path=self.binary_path,
+            auto_download=self.auto_download,
+        )
+
+        if use_cache:
+            self._cache.set(uri, result)
+        return result
+
+    async def check_server_real_async(
+        self, uri: str, use_cache: bool = True
+    ) -> RealHealthResult:
+        """Asynchronously check real connectivity for a single URI."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, lambda: self.check_server_real(uri, use_cache=use_cache)
+        )
+
+    async def check_servers_real_batch(
+        self, uris: List[str], use_cache: bool = True
+    ) -> List[RealHealthResult]:
+        """Asynchronously check a batch of URIs for real connectivity."""
+        tasks = [self.check_server_real_async(uri, use_cache=use_cache) for uri in uris]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        out: List[RealHealthResult] = []
+        for uri, r in zip(uris, results):
+            if isinstance(r, Exception):
+                out.append(
+                    RealHealthResult(
+                        config=uri,
+                        protocol=uri.split("://")[0] if "://" in uri else "unknown",
+                        error=str(r),
+                    )
+                )
+            else:
+                out.append(r)
+        out.sort(key=lambda x: (not x.google_204_ok, not x.reachable, x.latency_ms))
+        return out
+
+    def clear_cache(self) -> None:
+        """Clear the result cache."""
+        self._cache.clear()
 
 
 def _socks5_http_get(
@@ -118,12 +239,7 @@ def check_one(
     binary_path: Optional[str] = None,
     auto_download: bool = True,
 ) -> RealHealthResult:
-    """Spin up xray for *uri*, probe Google 204, return result.
-
-    Each call starts a fresh xray process on *local_port*, so
-    sequential calls share no state.  For batch use, prefer
-    :func:`check_real_connectivity_batch`.
-    """
+    """Spin up xray for *uri*, probe Google 204, return result."""
     if "://" not in uri:
         return RealHealthResult(
             config=uri,
@@ -183,23 +299,7 @@ def check_real_connectivity_batch(
     binary_path: Optional[str] = None,
     auto_download: bool = True,
 ) -> List[RealHealthResult]:
-    """Run real-connectivity checks on a list of URIs concurrently.
-
-    Each worker gets its own port (local_port_base + worker_index) so
-    processes don't collide.  Keep max_workers low (3-8) because each
-    worker runs a separate xray process.
-
-    Args:
-        uris:            Server config strings.
-        max_workers:     Parallel xray instances (default 5).
-        local_port_base: First SOCKS5 port; workers use base+0, base+1, …
-        timeout:         HTTP probe timeout per server.
-        binary_path:     Explicit xray binary path (or None for auto).
-        auto_download:   Download xray if not found.
-
-    Returns:
-        List of :class:`RealHealthResult`, sorted reachable-first.
-    """
+    """Run real-connectivity checks on a list of URIs concurrently."""
     results: List[RealHealthResult] = []
 
     import threading

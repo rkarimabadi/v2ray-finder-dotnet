@@ -177,6 +177,10 @@ class ParseError(V2RayFinderError):
         super().__init__(message, ErrorType.PARSE_ERROR, details)
 
 
+# Alias for backward compatibility and test expectations
+ConfigParseError = ParseError
+
+
 class ValidationError(V2RayFinderError):
     """Raised when server config validation fails."""
 
