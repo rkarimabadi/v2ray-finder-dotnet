@@ -18,7 +18,7 @@ from .normalizer import (
 )
 from .result import Err, Ok, Result
 from .source_registry import SourceRegistry, SourceStats
-from .sources import KnownSource, SourceConfig, SourceType
+from .sources import SourceEntry, SourceType, SourceTrust
 
 __version__ = "0.4.0"
 
@@ -40,9 +40,9 @@ __all__ = [
     "Result",
     "SourceRegistry",
     "SourceStats",
-    "SourceConfig",
+    "SourceEntry",
     "SourceType",
-    "KnownSource",
+    "SourceTrust",
 ]
 
 # xray real-connectivity layer (optional — gracefully absent if the xray
@@ -52,6 +52,7 @@ try:
         RealConnectivityChecker,
         RealHealthResult,
         _ResultCache,
+        find_free_port,
     )
     from .xray_runner import (
         XrayBinaryManager,
