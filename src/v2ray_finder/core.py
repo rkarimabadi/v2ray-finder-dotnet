@@ -16,6 +16,7 @@ from .exceptions import (
     NetworkError,
     ParseError,
     RateLimitError,
+    RepositoryNotFoundError,
     TimeoutError,
     V2RayFinderError,
 )
@@ -26,6 +27,9 @@ logger = logging.getLogger(__name__)
 
 _TOKEN_MIN_LEN = 20
 _KNOWN_PREFIXES = ("ghp_", "gho_", "ghs_", "ghu_", "github_pat_")
+
+# File extensions considered as potential v2ray config files
+_CONFIG_EXTENSIONS = {".txt", ".json", ".yaml", ".yml", ".conf", ".sub", ".base64"}
 
 
 def _validate_token(token: Optional[str]) -> Optional[str]:
@@ -221,6 +225,79 @@ class V2RayServerFinder:
     ) -> List[Dict]:
         """Like search_repos but returns [] on error (unless raise_errors=True)."""
         result = self.search_repos(query=query, per_page=per_page)
+        if result.is_ok():
+            return result.unwrap()
+        if self._raise_errors:
+            raise result.error
+        return []
+
+    def get_repo_files(
+        self,
+        repo: str,
+        path: str = "",
+        timeout: int = 15,
+    ) -> Result:
+        """List files in a GitHub repository that look like v2ray config files.
+
+        Args:
+            repo:    Repository slug in ``owner/name`` format.
+            path:    Sub-directory path inside the repo (default: root).
+            timeout: HTTP request timeout in seconds.
+
+        Returns:
+            Ok(list[dict]) on success — each dict contains at minimum
+            ``name``, ``path``, ``download_url``, ``size``, and ``type``.
+            Err(V2RayFinderError subclass) on any failure.
+        """
+        url = f"https://api.github.com/repos/{repo}/contents/{path}".rstrip("/")
+        try:
+            resp = requests.get(
+                url,
+                headers=dict(self._session.headers),
+                timeout=timeout,
+            )
+            self._check_rate_limit(resp)
+            if resp.status_code == 404:
+                return Err(RepositoryNotFoundError(f"Repository not found: {repo!r}"))
+            if resp.status_code == 401:
+                return Err(AuthenticationError("GitHub API authentication failed (401)."))
+            if resp.status_code == 403:
+                msg = ""
+                try:
+                    msg = resp.json().get("message", "")
+                except Exception:
+                    pass
+                return Err(RateLimitError(f"Rate limit hit: {msg}"))
+            resp.raise_for_status()
+            items: List[Dict] = resp.json() if isinstance(resp.json(), list) else []
+            config_files = [
+                item for item in items
+                if item.get("type") == "file"
+                and any(
+                    item.get("name", "").lower().endswith(ext)
+                    for ext in _CONFIG_EXTENSIONS
+                )
+            ]
+            return Ok(config_files)
+        except (RepositoryNotFoundError, AuthenticationError, RateLimitError, GitHubAPIError) as exc:
+            return Err(exc)
+        except requests.Timeout:
+            return Err(TimeoutError(f"Timed out fetching repo files for {repo!r}"))
+        except requests.ConnectionError as exc:
+            return Err(NetworkError(f"Connection error fetching repo files: {exc}"))
+        except requests.RequestException as exc:
+            return Err(GitHubAPIError(f"GitHub API request failed: {exc}"))
+        except Exception as exc:
+            return Err(V2RayFinderError(f"Unexpected error in get_repo_files: {exc}"))
+
+    def get_repo_files_or_empty(
+        self,
+        repo: str,
+        path: str = "",
+        timeout: int = 15,
+    ) -> List[Dict]:
+        """Like get_repo_files but returns [] on error (unless raise_errors=True)."""
+        result = self.get_repo_files(repo=repo, path=path, timeout=timeout)
         if result.is_ok():
             return result.unwrap()
         if self._raise_errors:
