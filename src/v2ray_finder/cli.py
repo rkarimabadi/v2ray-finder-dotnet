@@ -42,7 +42,15 @@ class StopController:
         self._thread.start()
 
     def _listen(self) -> None:
-        """Background thread: read stdin, call request_stop() on 'q'."""
+        """Background thread: read stdin, call request_stop() on 'q'.
+
+        Exits immediately when stdin is not a real tty (e.g. during pytest
+        capture) to avoid 'OSError: pytest: reading from stdin while output
+        is captured!' warnings.
+        """
+        if not sys.stdin.isatty():
+            self._active.clear()
+            return
         while self._active.is_set():
             try:
                 key = input().strip().lower()
@@ -54,7 +62,7 @@ class StopController:
                     self._finder.request_stop()
                     self._active.clear()
                     break
-            except EOFError:
+            except (EOFError, OSError):
                 self._active.clear()
                 break
 

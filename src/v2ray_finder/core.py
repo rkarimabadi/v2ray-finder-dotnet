@@ -20,6 +20,7 @@ This is different from the old batch-check-at-the-end approach.
 from __future__ import annotations
 
 import base64
+import importlib
 import logging
 import re
 import threading
@@ -321,6 +322,11 @@ class V2RayServerFinder:
         Note: inline checking is still applied during discovery; this
         method additionally runs a *batch* quality-score pass on the
         survivors.
+
+        The health_checker module is imported dynamically so that tests can
+        swap it via ``patch.dict(sys.modules, {'v2ray_finder.health_checker': mock})``
+        without being defeated by a module-level ``from .health_checker import ...``
+        that already bound the names at import time.
         """
         # Temporarily disable inline health so batch check runs on all
         orig = self._inline_health
@@ -332,18 +338,47 @@ class V2RayServerFinder:
             self._inline_health = orig
 
         if not check_health:
-            return [{"config": c, "protocol": c.split("://")[0] if "://" in c else "unknown"}
-                    for c in raw]
+            return [
+                {
+                    "config": c,
+                    "protocol": c.split("://")[0] if "://" in c else "unknown",
+                    "health_checked": False,
+                }
+                for c in raw
+            ]
+
+        # Dynamic import so tests can mock via patch.dict(sys.modules, ...)
+        try:
+            hc = importlib.import_module("v2ray_finder.health_checker")
+        except ImportError:
+            logger.warning(
+                "health_checker module unavailable — returning servers without health data"
+            )
+            return [
+                {
+                    "config": c,
+                    "protocol": c.split("://")[0] if "://" in c else "unknown",
+                    "health_checked": False,
+                }
+                for c in raw
+            ]
 
         logger.info("Running batch health check on %d servers...", len(raw))
-        health_results = check_servers_batch(
-            raw,
+
+        checker = hc.HealthChecker(
             timeout=health_timeout,
             check_google_204=self._check_google_204,
-            min_quality_score=min_quality_score,
-            filter_unhealthy=filter_unhealthy,
         )
-        return [health_result_to_dict(r) for r in health_results]
+        health_results = checker.check_servers(raw)
+
+        if filter_unhealthy or min_quality_score > 0:
+            health_results = hc.filter_healthy_servers(
+                health_results,
+                min_quality_score=min_quality_score,
+                exclude_unreachable=filter_unhealthy,
+            )
+
+        return [hc.health_result_to_dict(r) for r in health_results]
 
     def get_servers_with_real_health(
         self,
