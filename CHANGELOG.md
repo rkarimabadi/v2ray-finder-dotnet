@@ -4,6 +4,43 @@ All notable changes to v2ray-finder will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+---
+
+## [0.5.2] — 2026-05-10
+
+### Fixed
+
+- **`__init__.py`** — removed stale `KnownSource` and `SourceConfig` imports that
+  were left over from before the `sources.py` refactor (v0.4.0); replaced with
+  the correct `SourceEntry` and `SourceTrust` exports that already exist in
+  `sources.py`. This was causing an `ImportError` at collection time which
+  cascaded into all 13 test files failing to load.
+- **`xray_connectivity.py`** — upgraded to match the API expected by
+  `tests/test_xray_connectivity.py` (written for v0.5.1 but not yet implemented):
+  - `find_free_port()` — added (OS-assigned TCP port, no collisions)
+  - `RealHealthResult` — added `from_cache`, `xray_version`, `socks_port`,
+    `check_methods` fields; `latency_ms` now `Optional[float]`;
+    `quality_score` property (0–100, latency-based)
+  - `_ResultCache` — upgraded to per-entry TTL (`set(key, result, ttl=)`),
+    `stats` property (`hits`, `misses`, `size`, `hit_rate`), whitespace-stripped
+    keys for robustness
+  - `RealConnectivityChecker` — added `cache_stats` property,
+    `clear_result_cache()` (old `clear_cache()` kept as alias),
+    `concurrent_limit`, `startup_timeout`, `cache_enabled`, `show_progress`
+    params; failed results cached with short TTL (60 s)
+- **`pyproject.toml`** — version was stuck at `0.2.1`; bumped to `0.5.1` to
+  match `CHANGELOG.md` and `__version__`.
+- **`__init__.py` `__version__`** — synced to `0.5.1`.
+
+### Notes
+- No public API symbols were removed. `SourceEntry` and `SourceTrust` were
+  already public since v0.4.0; this release simply ensures they are correctly
+  re-exported from the top-level package.
+
+---
+
 ## [0.5.1] — 2026-05-09
 
 ### Added
@@ -15,7 +52,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   attempt; a single success resets the counter.
 - **Progress bar** — `show_progress=True` on `RealConnectivityChecker`
   activates a live `tqdm.asyncio` bar; falls back to periodic
-  `logger.info` lines (every ~10 %) when tqdm is not installed.
+  `logger.info` lines (every ~10 %) when tqdm is not installed.
 - **Result cache** — `_ResultCache` (SHA-256-keyed in-memory store);
   successful results cached for `cache_ttl` (default 10 min), failed
   results for 60 s; `from_cache: bool` field added to

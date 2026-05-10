@@ -20,7 +20,7 @@ from .result import Err, Ok, Result
 from .source_registry import SourceRegistry, SourceStats
 from .sources import SourceEntry, SourceType, SourceTrust
 
-__version__ = "0.4.0"
+__version__ = "0.5.1"
 
 __all__ = [
     "V2RayServerFinder",
