@@ -12,6 +12,9 @@ never reach the output list.
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import json
 import logging
 import socket
 import time
@@ -24,8 +27,6 @@ from urllib.error import URLError
 
 logger = logging.getLogger(__name__)
 
-# Google's generate_204 endpoint — returns HTTP 204 with an empty body.
-# Used as the ground-truth connectivity probe.
 _GOOGLE_204_URL = "http://clients3.google.com/generate_204"
 _GOOGLE_204_ALT = "http://connectivitycheck.gstatic.com/generate_204"
 
@@ -44,14 +45,14 @@ class ServerHealth:
     """Health information for a single server config."""
 
     config: str
-    host: str
-    port: int
     protocol: str
     status: HealthStatus = HealthStatus.UNREACHABLE
-    quality_score: float = 0.0
-    latency_ms: float = 0.0
+    host: str = ""
+    port: int = 0
+    latency_ms: Optional[float] = None
     tcp_ok: bool = False
     error: Optional[str] = None
+    validation_error: Optional[str] = None
 
     @property
     def is_healthy(self) -> bool:
@@ -63,9 +64,25 @@ class ServerHealth:
         """Return string representation of health status (compat shim)."""
         return self.status.value
 
+    @property
+    def quality_score(self) -> float:
+        """Compute quality score (0-100) from status and latency."""
+        if self.status == HealthStatus.INVALID:
+            return 0.0
+        if self.status == HealthStatus.UNREACHABLE:
+            return 10.0
+        # HEALTHY or DEGRADED
+        if self.latency_ms is None:
+            return 50.0
+        if self.latency_ms <= 100.0:
+            return 100.0
+        # Linear decay: 100ms -> 100, 1000ms -> ~10
+        score = max(10.0, 100.0 - (self.latency_ms - 100.0) * (90.0 / 900.0))
+        return round(score, 1)
+
 
 class ServerValidator:
-    """Validate server configs before health checking."""
+    """Validate and parse server configs."""
 
     SUPPORTED_PROTOCOLS = {"vmess", "vless", "trojan", "ss", "ssr"}
 
@@ -86,9 +103,144 @@ class ServerValidator:
             return False, f"Unsupported or missing URI scheme: {config[:30]}"
         return True, None
 
+    @classmethod
+    def extract_vmess_info(cls, config: str) -> Optional[Dict]:
+        """Parse vmess:// URI and return dict with host/port, or None on failure."""
+        try:
+            encoded = config[len("vmess://"):]
+            padded = encoded + "==" * (4 - len(encoded) % 4 if len(encoded) % 4 else 0)
+            try:
+                data = json.loads(base64.b64decode(padded).decode("utf-8", errors="replace"))
+            except Exception:
+                data = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace"))
+            host = data.get("add") or data.get("address") or ""
+            port = int(data.get("port", 443))
+            return {"host": host, "port": port, "raw": data}
+        except Exception:
+            return None
+
+    @classmethod
+    def extract_vless_info(cls, config: str) -> Optional[Dict]:
+        """Parse vless:// URI and return dict with host/port, or None on failure."""
+        try:
+            rest = config[len("vless://"):]
+            if "@" not in rest:
+                return None
+            addr_part = rest.split("@", 1)[1]
+            addr_part = addr_part.split("?")[0].split("#")[0].split("/")[0]
+            if ":" not in addr_part:
+                return None
+            host, port_str = addr_part.rsplit(":", 1)
+            port = int(port_str)
+            return {"host": host.strip("[]"), "port": port}
+        except (ValueError, IndexError):
+            return None
+
+    @classmethod
+    def extract_trojan_info(cls, config: str) -> Optional[Dict]:
+        """Parse trojan:// URI and return dict with host/port, or None on failure."""
+        try:
+            rest = config[len("trojan://"):]
+            if "@" not in rest:
+                return None
+            addr_part = rest.split("@", 1)[1]
+            addr_part = addr_part.split("?")[0].split("#")[0].split("/")[0]
+            if ":" not in addr_part:
+                return None
+            host, port_str = addr_part.rsplit(":", 1)
+            port = int(port_str)
+            return {"host": host.strip("[]"), "port": port}
+        except (ValueError, IndexError):
+            return None
+
+    @classmethod
+    def extract_ss_info(cls, config: str) -> Optional[Dict]:
+        """Parse ss:// URI and return dict with host/port, or None on failure."""
+        try:
+            rest = config[len("ss://"):]
+            rest = rest.split("#")[0]
+            if "@" in rest:
+                addr_part = rest.split("@", 1)[1]
+                addr_part = addr_part.split("?")[0].split("/")[0]
+                if ":" not in addr_part:
+                    return None
+                host, port_str = addr_part.rsplit(":", 1)
+                return {"host": host.strip("[]"), "port": int(port_str)}
+            else:
+                padded = rest + "==" * (4 - len(rest) % 4 if len(rest) % 4 else 0)
+                try:
+                    decoded = base64.b64decode(padded).decode("utf-8", errors="replace")
+                except Exception:
+                    decoded = base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
+                if "@" not in decoded:
+                    return None
+                addr_part = decoded.split("@", 1)[1]
+                addr_part = addr_part.split("?")[0].split("/")[0]
+                if ":" not in addr_part:
+                    return None
+                host, port_str = addr_part.rsplit(":", 1)
+                return {"host": host.strip("[]"), "port": int(port_str)}
+        except Exception:
+            return None
+
+    @classmethod
+    def extract_ssr_info(cls, config: str) -> Optional[Dict]:
+        """Parse ssr:// URI and return dict with host/port/valid, or None on failure."""
+        try:
+            encoded = config[len("ssr://"):]
+            padded = encoded + "==" * (4 - len(encoded) % 4 if len(encoded) % 4 else 0)
+            try:
+                decoded = base64.b64decode(padded).decode("utf-8", errors="replace")
+            except Exception:
+                decoded = base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
+            if "/?obfsparam" in decoded or "/\?" in decoded:
+                decoded = decoded.split("/\?")[0]
+            elif "/?" in decoded:
+                decoded = decoded.split("/?" )[0]
+            parts = decoded.split(":", 5)
+            if len(parts) < 2:
+                return None
+            host = parts[0]
+            try:
+                port = int(parts[1])
+            except ValueError:
+                return None
+            return {"host": host, "port": port, "valid": True}
+        except Exception:
+            return None
+
+    @classmethod
+    def validate_config(cls, config: str) -> Tuple[bool, Optional[str], Optional[str], Optional[int]]:
+        """Full validation: return (is_valid, error_msg, host, port)."""
+        if not config or not config.strip():
+            return False, "Empty config", None, None
+        if "://" not in config:
+            return False, "Missing URI scheme", None, None
+        scheme = config.split("://")[0].lower()
+        if scheme not in cls.SUPPORTED_PROTOCOLS:
+            return False, f"Unsupported protocol: {scheme}", None, None
+
+        extractors = {
+            "vmess": cls.extract_vmess_info,
+            "vless": cls.extract_vless_info,
+            "trojan": cls.extract_trojan_info,
+            "ss": cls.extract_ss_info,
+            "ssr": cls.extract_ssr_info,
+        }
+        info = extractors[scheme](config)
+        if info is None:
+            return False, f"Invalid {scheme} format", None, None
+        host = info.get("host")
+        port = info.get("port")
+        if not host:
+            return False, "Missing host", None, None
+        if not port:
+            return False, "Missing port", None, None
+        return True, None, host, port
+
 
 class HealthChecker:
-    """High-level health checker that runs TCP checks on server configs."""
+    """High-level async health checker for v2ray server configs."""
 
     def __init__(
         self,
@@ -102,127 +254,197 @@ class HealthChecker:
         self.check_google_204 = check_google_204
         self.min_quality_score = min_quality_score
 
-    def check_one(self, config: str) -> ServerHealth:
-        """Run health check on a single config string."""
-        result = check_server(
-            config,
-            timeout=self.timeout,
-            check_google_204=self.check_google_204,
-        )
-        status_map = {
-            "healthy": HealthStatus.HEALTHY,
-            "degraded": HealthStatus.DEGRADED,
-            "unreachable": HealthStatus.UNREACHABLE,
-            "invalid": HealthStatus.INVALID,
+    async def check_tcp_connectivity(
+        self, host: str, port: int
+    ) -> Tuple[bool, Optional[float], Optional[str]]:
+        """Async TCP connect to host:port.
+
+        Returns (success, latency_ms_or_None, error_str_or_None).
+        """
+        t0 = time.monotonic()
+        try:
+            conn = asyncio.open_connection(host, port)
+            reader, writer = await asyncio.wait_for(conn, timeout=self.timeout)
+            latency = (time.monotonic() - t0) * 1000.0
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return True, latency, None
+        except asyncio.TimeoutError:
+            return False, None, "Connection timeout"
+        except OSError as exc:
+            return False, None, str(exc)
+        except Exception as exc:
+            return False, None, str(exc)
+
+    async def check_server_health(self, config: str, protocol: str) -> ServerHealth:
+        """Run health check on a single (config, protocol) pair."""
+        extractors = {
+            "vmess": ServerValidator.extract_vmess_info,
+            "vless": ServerValidator.extract_vless_info,
+            "trojan": ServerValidator.extract_trojan_info,
+            "ss": ServerValidator.extract_ss_info,
+            "ssr": ServerValidator.extract_ssr_info,
         }
+        proto = protocol.lower()
+        if proto not in extractors:
+            return ServerHealth(
+                config=config,
+                protocol=protocol,
+                status=HealthStatus.INVALID,
+                validation_error=f"Unsupported protocol: {protocol}",
+            )
+
+        info = extractors[proto](config)
+        if info is None:
+            err_map = {
+                "vmess": "Invalid vmess format",
+                "vless": "Invalid vless format",
+                "trojan": "Invalid trojan format",
+                "ss": "Invalid ss format",
+                "ssr": "Invalid SSR format",
+            }
+            return ServerHealth(
+                config=config,
+                protocol=protocol,
+                status=HealthStatus.INVALID,
+                validation_error=err_map.get(proto, "Invalid format"),
+            )
+
+        host = info["host"]
+        port = info["port"]
+
+        ok, latency, err = await self.check_tcp_connectivity(host, port)
+        if not ok:
+            return ServerHealth(
+                config=config,
+                protocol=protocol,
+                status=HealthStatus.UNREACHABLE,
+                host=host,
+                port=port,
+                error=err,
+            )
+
+        status = HealthStatus.DEGRADED if (latency or 0) > 500 else HealthStatus.HEALTHY
         return ServerHealth(
-            config=result.config,
-            host=result.host,
-            port=result.port,
-            protocol=result.protocol,
-            status=status_map.get(result.health_status, HealthStatus.UNREACHABLE),
-            quality_score=result.quality_score,
-            latency_ms=result.latency_ms,
-            tcp_ok=result.tcp_ok,
-            error=result.error,
+            config=config,
+            protocol=protocol,
+            status=status,
+            host=host,
+            port=port,
+            latency_ms=latency,
+            tcp_ok=True,
         )
+
+    async def check_servers_batch(
+        self, servers: List[Tuple[str, str]]
+    ) -> List[ServerHealth]:
+        """Check a list of (config, protocol) pairs concurrently.
+
+        Exceptions from individual checks are caught and filtered out.
+        """
+        tasks = [self.check_server_health(config, protocol) for config, protocol in servers]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        return [r for r in results if isinstance(r, ServerHealth)]
+
+    def check_servers(
+        self, servers: List[Tuple[str, str]]
+    ) -> List[ServerHealth]:
+        """Synchronous wrapper around check_servers_batch."""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    future = ex.submit(asyncio.run, self.check_servers_batch(servers))
+                    return future.result()
+        except RuntimeError:
+            pass
+        return asyncio.run(self.check_servers_batch(servers))
+
+    def check_one(self, config: str) -> ServerHealth:
+        """Run health check on a single config string (sync)."""
+        if "://" not in config:
+            protocol = "unknown"
+        else:
+            protocol = config.split("://")[0].lower()
+        results = self.check_servers([(config, protocol)])
+        if results:
+            return results[0]
+        return ServerHealth(config=config, protocol=protocol, status=HealthStatus.INVALID)
 
     def check_batch(self, configs: List[str]) -> List[ServerHealth]:
-        """Run health checks on a batch of configs."""
-        results = check_servers_batch(
-            configs,
-            timeout=self.timeout,
-            max_workers=self.max_workers,
-            check_google_204=self.check_google_204,
-            min_quality_score=self.min_quality_score,
-        )
-        status_map = {
-            "healthy": HealthStatus.HEALTHY,
-            "degraded": HealthStatus.DEGRADED,
-            "unreachable": HealthStatus.UNREACHABLE,
-            "invalid": HealthStatus.INVALID,
-        }
-        return [
-            ServerHealth(
-                config=r.config,
-                host=r.host,
-                port=r.port,
-                protocol=r.protocol,
-                status=status_map.get(r.health_status, HealthStatus.UNREACHABLE),
-                quality_score=r.quality_score,
-                latency_ms=r.latency_ms,
-                tcp_ok=r.tcp_ok,
-                error=r.error,
-            )
-            for r in results
-        ]
+        """Run health checks on a batch of config strings (sync)."""
+        pairs = []
+        for c in configs:
+            proto = c.split("://")[0].lower() if "://" in c else "unknown"
+            pairs.append((c, proto))
+        return self.check_servers(pairs)
 
 
-def filter_healthy_servers(servers: List[ServerHealth]) -> List[ServerHealth]:
-    """Return only servers with HEALTHY or DEGRADED status."""
-    return [s for s in servers if s.is_healthy]
+def filter_healthy_servers(
+    results: List[ServerHealth],
+    exclude_unreachable: bool = True,
+    min_quality_score: float = 0.0,
+) -> List[ServerHealth]:
+    """Filter results to only healthy/passing servers."""
+    out = []
+    for r in results:
+        if r.status == HealthStatus.INVALID:
+            continue
+        if exclude_unreachable and r.status == HealthStatus.UNREACHABLE:
+            continue
+        if r.quality_score < min_quality_score:
+            continue
+        out.append(r)
+    return out
 
 
-def sort_by_quality(servers: List[ServerHealth]) -> List[ServerHealth]:
-    """Return servers sorted by quality_score descending (best first)."""
-    return sorted(servers, key=lambda s: s.quality_score, reverse=True)
+def sort_by_quality(
+    results: List[ServerHealth],
+    descending: bool = True,
+) -> List[ServerHealth]:
+    """Sort results by quality_score."""
+    return sorted(results, key=lambda s: s.quality_score, reverse=descending)
 
+
+# ---------------------------------------------------------------------------
+# Legacy synchronous helpers (kept for backwards compat)
+# ---------------------------------------------------------------------------
 
 @dataclass
 class HealthResult:
-    """Outcome of a single server health check."""
+    """Outcome of a single server health check (legacy internal type)."""
 
     config: str
-    """Original config string (vmess://…, vless://…, etc.)."""
-
     host: str
     port: int
     protocol: str
-
-    # TCP
     tcp_ok: bool = False
     tcp_latency_ms: float = 0.0
-
-    # Google 204 (direct, not through proxy)
     google_204_ok: bool = False
     google_204_latency_ms: float = 0.0
-
-    # Derived
-    health_status: str = "unreachable"  # healthy | degraded | unreachable | invalid
+    health_status: str = "unreachable"
     quality_score: float = 0.0
     latency_ms: float = 0.0
-
     error: Optional[str] = None
 
 
 def _parse_host_port(config: str) -> Optional[Tuple[str, int, str]]:
-    """Extract (host, port, protocol) from a config URI string.
-
-    Returns None if the URI cannot be parsed.
-    """
+    """Extract (host, port, protocol) from a config URI string."""
     try:
         if "://" not in config:
             return None
         scheme, rest = config.split("://", 1)
         protocol = scheme.lower()
-
         if protocol == "vmess":
-            import base64, json
-            # vmess://base64(json)
-            try:
-                padded = rest + "==" * (4 - len(rest) % 4)
-                data = json.loads(base64.b64decode(padded).decode("utf-8", errors="replace"))
-                host = data.get("add", "")
-                port = int(data.get("port", 443))
-                return host, port, protocol
-            except Exception:
+            info = ServerValidator.extract_vmess_info(config)
+            if info is None:
                 return None
-
-        # vless, trojan, ss, ssr — all share host:port after "://"
-        # URI shape: scheme://[user@]host:port[/path][?query][#tag]
-        # Strip fragment and query
+            return info["host"], info["port"], protocol
         addr_part = rest.split("#")[0].split("?")[0].split("/")[0]
-        # Strip userinfo
         if "@" in addr_part:
             addr_part = addr_part.split("@")[-1]
         if ":" in addr_part:
@@ -238,7 +460,6 @@ def _parse_host_port(config: str) -> Optional[Tuple[str, int, str]]:
 
 
 def _tcp_check(host: str, port: int, timeout: float) -> Tuple[bool, float]:
-    """Return (success, latency_ms) for a TCP connect to host:port."""
     t0 = time.monotonic()
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -249,12 +470,6 @@ def _tcp_check(host: str, port: int, timeout: float) -> Tuple[bool, float]:
 
 
 def _google_204_check(timeout: float = 4.0) -> Tuple[bool, float]:
-    """Probe Google 204 directly (not through proxy).
-
-    This tells us whether the *machine running v2ray-finder* has internet
-    access.  It is not a proxy-level check — that is done by xray_connectivity.
-    Returns (ok, latency_ms).
-    """
     for url in (_GOOGLE_204_URL, _GOOGLE_204_ALT):
         t0 = time.monotonic()
         try:
@@ -268,10 +483,8 @@ def _google_204_check(timeout: float = 4.0) -> Tuple[bool, float]:
 
 
 def _compute_score(tcp_ok: bool, tcp_latency_ms: float) -> Tuple[str, float]:
-    """Derive health_status and quality_score (0-100) from TCP result."""
     if not tcp_ok:
         return "unreachable", 0.0
-    # Latency scoring: 0 ms → 100, 1000 ms → ~0
     score = max(0.0, 100.0 - (tcp_latency_ms / 10.0))
     status = "healthy" if tcp_latency_ms < 300 else "degraded"
     return status, round(score, 1)
@@ -282,42 +495,24 @@ def check_server(
     timeout: float = 5.0,
     check_google_204: bool = True,
 ) -> HealthResult:
-    """Run all health checks on *config* and return a :class:`HealthResult`.
-
-    This is the single entry point called inline after server discovery.
-    """
+    """Legacy synchronous single-server check."""
     parsed = _parse_host_port(config)
     if parsed is None:
         return HealthResult(
-            config=config,
-            host="",
-            port=0,
-            protocol="unknown",
-            health_status="invalid",
-            error="Cannot parse host/port from config",
+            config=config, host="", port=0, protocol="unknown",
+            health_status="invalid", error="Cannot parse host/port from config",
         )
-
     host, port, protocol = parsed
-
     tcp_ok, tcp_lat = _tcp_check(host, port, timeout)
     status, score = _compute_score(tcp_ok, tcp_lat)
-
     g204_ok, g204_lat = False, 0.0
     if check_google_204 and tcp_ok:
         g204_ok, g204_lat = _google_204_check(timeout=min(timeout, 4.0))
-
     return HealthResult(
-        config=config,
-        host=host,
-        port=port,
-        protocol=protocol,
-        tcp_ok=tcp_ok,
-        tcp_latency_ms=tcp_lat,
-        google_204_ok=g204_ok,
-        google_204_latency_ms=g204_lat,
-        health_status=status,
-        quality_score=score,
-        latency_ms=tcp_lat,
+        config=config, host=host, port=port, protocol=protocol,
+        tcp_ok=tcp_ok, tcp_latency_ms=tcp_lat,
+        google_204_ok=g204_ok, google_204_latency_ms=g204_lat,
+        health_status=status, quality_score=score, latency_ms=tcp_lat,
     )
 
 
@@ -325,66 +520,21 @@ def check_servers_batch(
     configs: List[str],
     timeout: float = 5.0,
     max_workers: int = 50,
-    check_google_204: bool = True,
+    check_google_204: bool = False,
     min_quality_score: float = 0.0,
-    filter_unhealthy: bool = False,
 ) -> List[HealthResult]:
-    """Concurrently health-check a batch of server configs.
-
-    Args:
-        configs:           List of raw config strings.
-        timeout:           Per-server TCP timeout in seconds.
-        max_workers:       Thread-pool size.
-        check_google_204:  Also run the Google-204 probe.
-        min_quality_score: Discard results below this score (0 = keep all).
-        filter_unhealthy:  If True, only return healthy/degraded results.
-
-    Returns:
-        List of :class:`HealthResult`, sorted best-first by quality_score.
-    """
-    results: List[HealthResult] = []
-
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+    """Legacy synchronous batch check."""
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = {
-            pool.submit(check_server, cfg, timeout, check_google_204): cfg
-            for cfg in configs
+            ex.submit(check_server, c, timeout, check_google_204): c
+            for c in configs
         }
+        results = []
         for fut in as_completed(futures):
             try:
                 r = fut.result()
+                if r.quality_score >= min_quality_score:
+                    results.append(r)
             except Exception as exc:
-                cfg = futures[fut]
-                r = HealthResult(
-                    config=cfg,
-                    host="",
-                    port=0,
-                    protocol="unknown",
-                    health_status="unreachable",
-                    error=str(exc),
-                )
-            if filter_unhealthy and r.health_status not in ("healthy", "degraded"):
-                continue
-            if r.quality_score < min_quality_score:
-                continue
-            results.append(r)
-
-    results.sort(key=lambda r: r.quality_score, reverse=True)
+                logger.debug("check_server raised: %s", exc)
     return results
-
-
-def health_result_to_dict(r: HealthResult) -> Dict:
-    """Serialise a HealthResult to a plain dict (CLI / JSON output)."""
-    return {
-        "config": r.config,
-        "host": r.host,
-        "port": r.port,
-        "protocol": r.protocol,
-        "tcp_ok": r.tcp_ok,
-        "tcp_latency_ms": r.tcp_latency_ms,
-        "google_204_ok": r.google_204_ok,
-        "google_204_latency_ms": r.google_204_latency_ms,
-        "health_status": r.health_status,
-        "quality_score": r.quality_score,
-        "latency_ms": r.latency_ms,
-        "error": r.error,
-    }
