@@ -324,22 +324,22 @@ class XrayBinaryManager(XrayRunner):
             self._download_dir.mkdir(parents=True, exist_ok=True)
         self._resolved_binary: Optional[str] = None
 
-    def find_binary(self) -> Optional[str]:
-        """Return path to xray binary (cached after first successful lookup).
+    def find_binary(self) -> Optional[Path]:
+        """Return path to xray binary as a Path object (cached after first lookup).
 
         Raises:
             XrayBinaryNotFoundError: If an explicit binary_path was given but
                 the file does not exist at that path.
         """
         if self._resolved_binary is not None:
-            return self._resolved_binary
+            return Path(self._resolved_binary)
 
         # 1. explicit path — fail loudly if given but missing
         if self._binary_path:
             p = Path(self._binary_path)
             if p.is_file():
-                self._resolved_binary = self._binary_path
-                return self._resolved_binary
+                self._resolved_binary = str(p)
+                return p
             raise XrayBinaryNotFoundError(
                 f"Explicit binary path does not exist: {self._binary_path!r}"
             )
@@ -348,27 +348,27 @@ class XrayBinaryManager(XrayRunner):
         found = shutil.which("xray")
         if found:
             self._resolved_binary = found
-            return self._resolved_binary
+            return Path(found)
 
         # 3. common install dirs
         for d in _COMMON_INSTALL_DIRS:
             candidate = Path(d) / _binary_name()
             if candidate.is_file():
                 self._resolved_binary = str(candidate)
-                return self._resolved_binary
+                return candidate
 
         # 4. custom download_dir
         if self._download_dir is not None:
             candidate = self._download_dir / _binary_name()
             if candidate.is_file():
                 self._resolved_binary = str(candidate)
-                return self._resolved_binary
+                return candidate
 
         # 5. default cache dir
         cached = _cache_dir() / _binary_name()
         if cached.is_file():
             self._resolved_binary = str(cached)
-            return self._resolved_binary
+            return cached
 
         return None
 
@@ -376,7 +376,7 @@ class XrayBinaryManager(XrayRunner):
         """Like XrayRunner._get_binary but honours custom download_dir."""
         path = self.find_binary()
         if path:
-            return path
+            return str(path)
         if self._auto_download:
             logger.info("xray binary not found — downloading...")
             result = self._download_to_dir()
@@ -432,7 +432,7 @@ class XrayBinaryManager(XrayRunner):
             if not binary:
                 raise XrayBinaryNotFoundError("xray binary not found")
             result = subprocess.run(
-                [binary, "version"],
+                [str(binary), "version"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -441,6 +441,13 @@ class XrayBinaryManager(XrayRunner):
             return first_line or "unknown"
         except Exception:
             return "unknown"
+
+    def is_available(self) -> bool:
+        """Return True if xray binary is available on this system."""
+        try:
+            return self.find_binary() is not None
+        except XrayBinaryNotFoundError:
+            return False
 
     def start(self, config: dict) -> None:
         """Start xray using startup_timeout for port-readiness check."""
@@ -491,12 +498,12 @@ class XrayBinaryManager(XrayRunner):
                 binary = mgr.find_binary()
                 if binary is None:
                     if mgr._auto_download:
-                        binary = mgr._download_to_dir()
+                        binary = Path(mgr._download_to_dir())
                     else:
                         raise XrayBinaryNotFoundError("xray binary not found.")
 
                 ctx_self._proc = await asyncio.create_subprocess_exec(
-                    binary, "run", "-c", str(config_path),
+                    str(binary), "run", "-c", str(config_path),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
