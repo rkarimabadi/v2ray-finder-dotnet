@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ class SourceRegistry:
     def record_success(self, url: str, server_count: int) -> None:
         """Record a successful fetch that yielded *server_count* servers."""
         s = self.get(url)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         s.fetch_count += 1
         s.success_count += 1
         s.last_fetched = now
@@ -70,7 +70,7 @@ class SourceRegistry:
         s = self.get(url)
         s.fetch_count += 1
         s.failure_count += 1
-        s.last_fetched = datetime.utcnow()
+        s.last_fetched = datetime.now(timezone.utc)
         logger.debug(f"[SourceRegistry] failure {url!r}")
 
     def update_overlap(self, url: str, ratio: float) -> None:
