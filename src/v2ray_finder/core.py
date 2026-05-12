@@ -341,11 +341,19 @@ class V2RayServerFinder:
     ) -> Result:
         """Fetch a URL and extract v2ray config strings.
 
+        Uses ``requests.get`` directly (not ``self._session``) so that tests
+        can patch ``requests.get`` in the standard way, consistent with
+        ``search_repos`` and ``get_repo_files``.
+
         Returns:
             Ok(list[str]) on success, Err(V2RayFinderError) on failure.
         """
         try:
-            resp = self._session.get(url, timeout=timeout)
+            resp = requests.get(
+                url,
+                headers=dict(self._session.headers),
+                timeout=timeout,
+            )
             resp.raise_for_status()
             return Ok(self._parse_servers(resp.text))
         except requests.Timeout:
