@@ -37,6 +37,13 @@ def _ok(servers: list) -> MagicMock:
     return m
 
 
+class _FakeSource:
+    """Minimal stub that mimics a SourceEntry with a .url attribute."""
+
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+
 # ===========================================================================
 # 1. core.py – get_servers_from_known_sources
 # ===========================================================================
@@ -46,55 +53,63 @@ class TestKnownSourcesInterrupt:
     """get_servers_from_known_sources() must catch KeyboardInterrupt."""
 
     def _finder_two_sources(self):
-        f = _finder()
-        f.DIRECT_SOURCES = ["url_a", "url_b"]
-        return f
+        """Return a finder whose get_enabled_sources is patched to two fake URLs."""
+        return _finder()
 
     def test_returns_partial_when_second_url_raises(self):
         """Servers fetched before Ctrl+C must be returned."""
         finder = self._finder_two_sources()
+        fake_sources = [_FakeSource("url_a"), _FakeSource("url_b")]
 
         def side_effect(url, **_):
             if url == "url_a":
                 return Ok(["vmess://partial"])
             raise KeyboardInterrupt
 
-        with patch.object(finder, "get_servers_from_url", side_effect=side_effect):
-            result = finder.get_servers_from_known_sources()
+        with patch("v2ray_finder.core.get_enabled_sources", return_value=fake_sources):
+            with patch.object(finder, "get_servers_from_url", side_effect=side_effect):
+                result = finder.get_servers_from_known_sources()
 
         assert "vmess://partial" in result
 
     def test_sets_should_stop_after_interrupt(self):
         finder = self._finder_two_sources()
+        fake_sources = [_FakeSource("url_a"), _FakeSource("url_b")]
 
-        with patch.object(
-            finder, "get_servers_from_url", side_effect=KeyboardInterrupt
-        ):
-            finder.get_servers_from_known_sources()
+        with patch("v2ray_finder.core.get_enabled_sources", return_value=fake_sources):
+            with patch.object(
+                finder, "get_servers_from_url", side_effect=KeyboardInterrupt
+            ):
+                finder.get_servers_from_known_sources()
 
         assert finder.should_stop() is True
 
     def test_interrupt_does_not_propagate(self):
         """KeyboardInterrupt must NOT escape the method."""
         finder = self._finder_two_sources()
+        fake_sources = [_FakeSource("url_a"), _FakeSource("url_b")]
 
-        with patch.object(
-            finder, "get_servers_from_url", side_effect=KeyboardInterrupt
-        ):
-            try:
-                finder.get_servers_from_known_sources()
-            except KeyboardInterrupt:
-                pytest.fail(
-                    "KeyboardInterrupt escaped get_servers_from_known_sources()"
-                )
+        with patch("v2ray_finder.core.get_enabled_sources", return_value=fake_sources):
+            with patch.object(
+                finder, "get_servers_from_url", side_effect=KeyboardInterrupt
+            ):
+                try:
+                    finder.get_servers_from_known_sources()
+                except KeyboardInterrupt:
+                    pytest.fail(
+                        "KeyboardInterrupt escaped get_servers_from_known_sources()"
+                    )
 
     def test_reset_clears_stop_flag(self):
         """After request_stop(), reset_stop() makes should_stop() False again."""
         finder = self._finder_two_sources()
-        with patch.object(
-            finder, "get_servers_from_url", side_effect=KeyboardInterrupt
-        ):
-            finder.get_servers_from_known_sources()
+        fake_sources = [_FakeSource("url_a"), _FakeSource("url_b")]
+
+        with patch("v2ray_finder.core.get_enabled_sources", return_value=fake_sources):
+            with patch.object(
+                finder, "get_servers_from_url", side_effect=KeyboardInterrupt
+            ):
+                finder.get_servers_from_known_sources()
 
         assert finder.should_stop() is True
         finder.reset_stop()
