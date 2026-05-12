@@ -277,7 +277,7 @@ class V2RayServerFinder:
             ``name``, ``path``, ``download_url``, ``size``, and ``type``.
             Err(V2RayFinderError subclass) on any failure.
         """
-        url = f"https://api.github.com/repos/{repo}/contents/{path}".rstrip("/")
+        url = f"https://api.github.com/repos/{repo}/contents/{path}"
         try:
             resp = requests.get(
                 url,
@@ -286,28 +286,18 @@ class V2RayServerFinder:
             )
             self._check_rate_limit(resp)
             if resp.status_code == 404:
-                return Err(RepositoryNotFoundError(f"Repository not found: {repo!r}"))
+                return Err(RepositoryNotFoundError(repo))
             if resp.status_code == 401:
-                return Err(AuthenticationError("GitHub API authentication failed (401)."))
-            if resp.status_code == 403:
-                msg = ""
-                try:
-                    msg = resp.json().get("message", "")
-                except Exception:
-                    pass
-                return Err(RateLimitError(f"Rate limit hit: {msg}"))
+                return Err(AuthenticationError("Authentication required for this repo."))
             resp.raise_for_status()
-            items: List[Dict] = resp.json() if isinstance(resp.json(), list) else []
-            config_files = [
-                item for item in items
-                if item.get("type") == "file"
-                and any(
-                    item.get("name", "").lower().endswith(ext)
-                    for ext in _CONFIG_EXTENSIONS
-                )
-            ]
-            return Ok(config_files)
-        except (RepositoryNotFoundError, AuthenticationError, RateLimitError, GitHubAPIError) as exc:
+            items = resp.json()
+            if isinstance(items, list):
+                return Ok(items)
+            # Single file response
+            if isinstance(items, dict):
+                return Ok([items])
+            return Ok([])
+        except (RepositoryNotFoundError, AuthenticationError) as exc:
             return Err(exc)
         except requests.Timeout:
             return Err(TimeoutError(f"Timed out fetching repo files for {repo!r}"))
@@ -365,6 +355,19 @@ class V2RayServerFinder:
         except Exception as exc:
             return Err(ParseError(f"Error parsing response from {url}: {exc}"))
 
+    def get_servers_from_url_or_empty(
+        self,
+        url: str,
+        timeout: int = 15,
+    ) -> List[str]:
+        """Like get_servers_from_url but returns [] on error (unless raise_errors=True)."""
+        result = self.get_servers_from_url(url=url, timeout=timeout)
+        if result.is_ok():
+            return result.unwrap()
+        if self._raise_errors:
+            raise result.error
+        return []
+
     # ------------------------------------------------------------------ #
     # GitHub-based discovery
     # ------------------------------------------------------------------ #
@@ -374,266 +377,175 @@ class V2RayServerFinder:
         search_keywords: Optional[List[str]] = None,
         max_repos: int = 10,
         timeout: int = 15,
+        progress_callback=None,
     ) -> List[str]:
-        """Search GitHub for repos containing v2ray configs and collect servers.
+        """Search GitHub and return raw config strings from discovered repos.
 
         Args:
-            search_keywords: Keywords to search for (default: ["v2ray", "config"]).
-            max_repos:       Maximum repos to inspect per keyword.
+            search_keywords: Keywords to use for GitHub search (default: v2ray presets).
+            max_repos:       Maximum number of repos to scan.
             timeout:         Per-request timeout.
+            progress_callback: Optional callable(current, total, message).
 
         Returns:
-            Deduplicated list of server config strings.
+            Flat list of raw config strings (vmess://, vless://, etc.).
         """
-        if search_keywords is None:
-            search_keywords = ["v2ray config"]
+        keywords = search_keywords or ["v2ray config", "v2ray subscription", "clash config"]
+        all_servers: List[str] = []
 
-        seen: Dict[str, None] = {}
-        results: List[str] = []
-
-        for keyword in search_keywords:
+        for keyword in keywords:
             if self.should_stop():
                 break
-            repo_result = self.search_repos(query=keyword, per_page=max_repos)
-            if repo_result.is_err():
-                if self._raise_errors:
-                    raise repo_result.error
-                logger.warning("search_repos failed for %r: %s", keyword, repo_result.error)
+            result = self.search_repos(query=keyword, per_page=max_repos)
+            if result.is_err():
+                logger.warning("search_repos failed for %r: %s", keyword, result.error)
                 continue
 
-            repos = repo_result.unwrap()
-            for repo in repos:
+            repos = result.unwrap()
+            for i, repo in enumerate(repos):
                 if self.should_stop():
                     break
                 full_name = repo.get("full_name", "")
                 if not full_name:
                     continue
 
+                if progress_callback:
+                    progress_callback(i, len(repos), f"Scanning {full_name}")
+
                 files_result = self.get_repo_files(full_name, timeout=timeout)
                 if files_result.is_err():
-                    logger.warning("get_repo_files failed for %r: %s", full_name, files_result.error)
                     continue
 
-                for f in files_result.unwrap():
-                    dl_url = f.get("download_url")
+                for file_info in files_result.unwrap():
+                    if self.should_stop():
+                        break
+                    dl_url = file_info.get("download_url")
                     if not dl_url:
                         continue
-                    url_result = self.get_servers_from_url(dl_url, timeout=timeout)
-                    if url_result.is_err():
-                        logger.warning("get_servers_from_url failed for %r: %s", dl_url, url_result.error)
+                    _, ext = os.path.splitext(file_info.get("name", ""))
+                    if ext.lower() not in _CONFIG_EXTENSIONS:
                         continue
-                    for srv in url_result.unwrap():
-                        if srv not in seen:
-                            seen[srv] = None
-                            results.append(srv)
+                    url_result = self.get_servers_from_url(dl_url, timeout=timeout)
+                    if url_result.is_ok():
+                        all_servers.extend(url_result.unwrap())
 
-        return results
-
-    # ------------------------------------------------------------------ #
-    # Parsing helpers
-    # ------------------------------------------------------------------ #
-
-    _PROTO_RE = re.compile(
-        r"(?:vmess|vless|trojan|ss|ssr)://[A-Za-z0-9+/=_\-@:.?&#%]+",
-        re.IGNORECASE,
-    )
-
-    def _parse_servers(self, text: str) -> List[str]:
-        """Extract all proxy URIs from raw text (deduplicated, order-preserved)."""
-        return list(dict.fromkeys(self._PROTO_RE.findall(text)))
+        return all_servers
 
     # ------------------------------------------------------------------ #
-    # Known-source discovery
+    # Known static subscription sources
     # ------------------------------------------------------------------ #
 
     def get_servers_from_known_sources(
-        self, limit: Optional[int] = None
+        self,
+        timeout: int = 15,
+        progress_callback=None,
     ) -> List[str]:
-        """Fetch servers from all enabled static subscription sources."""
-        results: List[str] = []
-        for src in get_enabled_sources():
+        """Fetch v2ray configs from built-in known subscription URLs.
+
+        Returns:
+            Flat list of raw config strings.
+        """
+        sources = get_enabled_sources()
+        all_servers: List[str] = []
+        total = len(sources)
+
+        for i, source in enumerate(sources):
             if self.should_stop():
                 break
-            result = self.get_servers_from_url(src.url)
+            if progress_callback:
+                progress_callback(i, total, f"Fetching {source.name}")
+            result = self.get_servers_from_url(source.url, timeout=timeout)
             if result.is_ok():
-                results.extend(result.unwrap())
+                all_servers.extend(result.unwrap())
             else:
-                if self._raise_errors:
-                    raise result.error
-                logger.warning("Failed to fetch %s: %s", src.url, result.error)
-            if limit and len(results) >= limit:
-                break
-        return results[:limit] if limit else results
+                logger.debug("Failed to fetch source %r: %s", source.name, result.error)
+
+        return all_servers
 
     # ------------------------------------------------------------------ #
-    # High-level API
+    # Health-checked discovery
     # ------------------------------------------------------------------ #
-
-    def get_all_servers(
-        self,
-        use_github_search: bool = False,
-        limit: Optional[int] = None,
-    ) -> List[str]:
-        """Fetch and deduplicate servers from all enabled sources."""
-        results = self.get_servers_from_known_sources(limit=limit)
-        seen: Dict[str, None] = {}
-        deduped: List[str] = []
-        for s in results:
-            if s not in seen:
-                seen[s] = None
-                deduped.append(s)
-        return deduped[:limit] if limit else deduped
 
     def get_servers_with_health(
         self,
-        check_health: bool = True,
-        filter_unhealthy: bool = False,
+        servers: List[str],
+        timeout: float = 5.0,
         min_quality_score: float = 0.0,
-        use_github_search: bool = False,
-        limit: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
-        """Return servers as dicts, optionally with health-check data.
-
-        Each dict always contains ``config`` and ``health_checked``.
-        When check_health=True and health_checker is available, additional
-        fields are populated: ``health_status``, ``latency_ms``, ``quality_score``,
-        ``protocol``, ``host``, ``port``, ``error``.
+        progress_callback=None,
+    ):
+        """Run health checks on a list of config strings.
 
         Args:
-            check_health:      Run TCP health checks (requires health_checker module).
-            filter_unhealthy:  If True, exclude UNREACHABLE/INVALID servers.
-            min_quality_score: Minimum quality_score to keep (0-100).
-            use_github_search: Also search GitHub repos for configs.
-            limit:             Maximum number of servers to return.
+            servers:           List of raw config strings.
+            timeout:           Per-server TCP timeout.
+            min_quality_score: Filter out servers below this score.
+            progress_callback: Optional callable(current, total, message).
 
         Returns:
-            List of server dicts.
+            List of ServerHealth objects (from health_checker module).
         """
-        servers = self.get_all_servers(use_github_search=use_github_search, limit=limit)
+        from .health_checker import HealthChecker, filter_healthy_servers
 
-        if not check_health:
-            return [{"config": cfg, "health_checked": False} for cfg in servers]
+        checker = HealthChecker(
+            timeout=timeout,
+            min_quality_score=min_quality_score,
+        )
 
-        # Try to import health_checker; fall back gracefully if unavailable
-        try:
-            import sys
-            hc_mod = sys.modules.get("v2ray_finder.health_checker")
-            if hc_mod is None:
-                from . import health_checker as hc_mod  # type: ignore
-        except Exception:
-            logger.warning("health_checker not available; returning without health data.")
-            return [{"config": cfg, "health_checked": False} for cfg in servers]
+        if progress_callback:
+            progress_callback(0, len(servers), "Starting health checks…")
 
-        if hc_mod is None:
-            return [{"config": cfg, "health_checked": False} for cfg in servers]
+        results = checker.check_batch(servers)
 
-        # Build (config, protocol) pairs
-        pairs = []
-        for cfg in servers:
-            proto = cfg.split("://")[0].lower() if "://" in cfg else "unknown"
-            pairs.append((cfg, proto))
+        if progress_callback:
+            progress_callback(len(servers), len(servers), "Health checks complete.")
 
-        if not pairs:
-            return []
+        return filter_healthy_servers(results, min_quality_score=min_quality_score)
 
-        try:
-            checker = hc_mod.HealthChecker(
-                timeout=self._health_timeout,
-                check_google_204=self._check_google_204,
-            )
-            health_results = checker.check_servers(pairs)
-        except Exception as exc:
-            logger.warning("Health check failed: %s", exc)
-            return [{"config": cfg, "health_checked": False} for cfg in servers]
-
-        # Optionally filter
-        if filter_unhealthy or min_quality_score > 0:
-            health_results = hc_mod.filter_healthy_servers(
-                health_results,
-                exclude_unreachable=filter_unhealthy,
-                min_quality_score=min_quality_score,
-            )
-
-        # Format output
-        out = []
-        for h in health_results:
-            out.append({
-                "config": h.config,
-                "health_checked": True,
-                "health_status": h.status.value,
-                "latency_ms": h.latency_ms,
-                "quality_score": h.quality_score,
-                "protocol": h.protocol,
-                "host": h.host,
-                "port": h.port,
-                "error": h.error,
-            })
-
-        if limit:
-            out = out[:limit]
-        return out
+    # ------------------------------------------------------------------ #
+    # Combined pipeline helpers
+    # ------------------------------------------------------------------ #
 
     def get_servers_sorted(
         self,
-        use_github_search: bool = False,
-        limit: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
-        """Return server dicts sorted with metadata.
-
-        Each dict contains: index, protocol, config, fetched_at.
-        """
-        servers = self.get_all_servers(
-            use_github_search=use_github_search, limit=limit
-        )
-        now = datetime.datetime.utcnow().isoformat() + "Z"
-        result = []
-        for i, cfg in enumerate(servers):
-            protocol = cfg.split("://")[0].lower() if "://" in cfg else "unknown"
-            result.append({
-                "index": i,
-                "protocol": protocol,
-                "config": cfg,
-                "fetched_at": now,
-            })
-        return result
-
-    def save_to_file(
-        self,
-        filename: str,
-        limit: Optional[int] = None,
-        use_github_search: bool = False,
-        check_health: bool = False,
-        filter_unhealthy: bool = False,
+        servers: List[str],
+        timeout: float = 5.0,
         min_quality_score: float = 0.0,
-    ) -> Tuple[int, str]:
-        """Save server configs to *filename*, one per line.
+    ) -> List[str]:
+        """Health-check *servers*, sort by quality, return config strings only."""
+        from .health_checker import sort_by_quality
 
-        Args:
-            filename:          Output file path.
-            limit:             Maximum number of configs to save.
-            use_github_search: Also search GitHub repos.
-            check_health:      Run health checks before saving.
-            filter_unhealthy:  Only save healthy servers (requires check_health=True).
-            min_quality_score: Minimum quality threshold (requires check_health=True).
+        health_results = self.get_servers_with_health(
+            servers,
+            timeout=timeout,
+            min_quality_score=min_quality_score,
+        )
+        sorted_results = sort_by_quality(health_results, descending=True)
+        return [r.config for r in sorted_results]
 
-        Returns:
-            (count_saved, filename) tuple.
-        """
-        if check_health:
-            health_results = self.get_servers_with_health(
-                check_health=True,
-                filter_unhealthy=filter_unhealthy,
-                min_quality_score=min_quality_score,
-                use_github_search=use_github_search,
-                limit=limit,
-            )
-            configs = [r["config"] for r in health_results]
-        else:
-            configs = self.get_all_servers(
-                use_github_search=use_github_search, limit=limit
-            )
+    # ------------------------------------------------------------------ #
+    # Internal helpers
+    # ------------------------------------------------------------------ #
 
-        with open(filename, "w", encoding="utf-8") as fh:
-            for cfg in configs:
-                fh.write(cfg + "\n")
-        return len(configs), filename
+    def _parse_servers(self, text: str) -> List[str]:
+        """Extract v2ray config URIs from a block of text."""
+        protocols = ("vmess://", "vless://", "trojan://", "ss://", "ssr://")
+        servers: List[str] = []
+        # Try base64-decode first (subscription format)
+        stripped = text.strip()
+        if stripped and not any(stripped.startswith(p) for p in protocols):
+            try:
+                import base64
+                # Add padding if needed
+                padded = stripped + "==" * (4 - len(stripped) % 4 if len(stripped) % 4 else 0)
+                decoded = base64.b64decode(padded).decode("utf-8", errors="replace")
+                if any(decoded.startswith(p) for p in protocols) or "\n" in decoded:
+                    text = decoded
+            except Exception:
+                pass
+
+        for line in text.splitlines():
+            line = line.strip()
+            if any(line.startswith(p) for p in protocols):
+                servers.append(line)
+
+        return servers
