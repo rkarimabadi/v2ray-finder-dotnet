@@ -6,6 +6,21 @@ endpoint.  A 204 response means the proxy is alive and has internet access.
 
 All heavy lifting is done by :class:`RealConnectivityChecker`.
 For batch use, call :func:`check_real_connectivity_batch`.
+
+Quality scoring methodology
+---------------------------
+We use a piecewise-linear latency curve that mirrors real-world UX thresholds,
+the same approach used by v2rayA and hiddify-next:
+
+    ≤100 ms   → 100   (excellent)
+    ≤300 ms   → 100→70 (good)
+    ≤1000 ms  → 70→20  (acceptable → poor)
+    ≤3000 ms  → 20→0   (poor → floor)
+    >3000 ms  → 0      (hard floor)
+    unreachable/None → 0
+
+This fixes the old formula which had a dead-zone (all latencies ≥2000ms scored
+identically), making server sorting meaningless for slow-but-working servers.
 """
 
 from __future__ import annotations
@@ -27,6 +42,32 @@ logger = logging.getLogger(__name__)
 _GOOGLE_204_HOST = "clients3.google.com"
 _GOOGLE_204_PATH = "/generate_204"
 _GOOGLE_204_PORT = 80
+
+
+# ---------------------------------------------------------------------------
+# Quality scoring helper (module-level so both classes share identical logic)
+# ---------------------------------------------------------------------------
+
+def _latency_to_score(latency_ms: float) -> float:
+    """Map a latency value to a 0-100 quality score.
+
+    Piecewise-linear curve tuned to real-world UX thresholds:
+
+    ≤100 ms   → 100
+    ≤300 ms   → 100 → 70  (excellent → good)
+    ≤1000 ms  → 70  → 20  (good → acceptable)
+    ≤3000 ms  → 20  → 0   (acceptable → floor)
+    >3000 ms  → 0
+    """
+    if latency_ms <= 100.0:
+        return 100.0
+    if latency_ms <= 300.0:
+        return 100.0 - (latency_ms - 100.0) * (30.0 / 200.0)
+    if latency_ms <= 1000.0:
+        return 70.0 - (latency_ms - 300.0) * (50.0 / 700.0)
+    if latency_ms <= 3000.0:
+        return 20.0 - (latency_ms - 1000.0) * (20.0 / 2000.0)
+    return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -64,20 +105,17 @@ class RealHealthResult:
     def quality_score(self) -> float:
         """Score 0-100 based on reachability and latency.
 
-        100  → reachable and latency <= 100 ms
-        0    → not reachable
-        Linear interpolation between 100 ms (score 100) and 2000 ms (score 0)
-        for intermediate latencies.
+        Uses a piecewise-linear curve (see module docstring):
+          unreachable / no latency  → 0
+          ≤100 ms                   → 100
+          ≤300 ms                   → 100 → 70
+          ≤1000 ms                  → 70  → 20
+          ≤3000 ms                  → 20  → 0
+          >3000 ms                  → 0
         """
         if not self.reachable or self.latency_ms is None:
             return 0.0
-        latency = self.latency_ms
-        if latency <= 100.0:
-            return 100.0
-        if latency >= 2000.0:
-            return max(0.0, 100.0 - (latency - 100.0) / 19.0)
-        # Linear: 100 ms → 100, 2000 ms → 0
-        return max(0.0, 100.0 - (latency - 100.0) * 100.0 / 1900.0)
+        return round(max(0.0, _latency_to_score(self.latency_ms)), 1)
 
 
 # ---------------------------------------------------------------------------
@@ -92,17 +130,9 @@ class _ResultCache:
         self._hits: int = 0
         self._misses: int = 0
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _key(config: str) -> str:
         return config.strip()
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def get(self, config: str) -> Optional[RealHealthResult]:
         """Return cached result or None if absent / expired."""
@@ -157,7 +187,7 @@ class RealConnectivityChecker:
         checker = RealConnectivityChecker()
 
         # Sync
-        result = checker.check_server_real(uri)
+        result = checker.check_server_real_sync(uri)
 
         # Async
         result = await checker.check_server_real(uri)

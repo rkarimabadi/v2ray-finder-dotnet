@@ -96,32 +96,77 @@ class TestResultCache:
 
     def test_identical_configs_same_key(self):
         cache = _ResultCache()
-        # Leading/trailing whitespace should not create a different key
         cache.set(SAMPLE_CONFIG, _make_result(), ttl=60.0)
         assert cache.get(f"  {SAMPLE_CONFIG}  ") is not None
 
 
 # ---------------------------------------------------------------------------
-# RealHealthResult tests
+# RealHealthResult -- quality_score tests
 # ---------------------------------------------------------------------------
 
 
 class TestRealHealthResult:
-    def test_quality_score_unreachable(self):
+    def test_quality_score_unreachable_is_zero(self):
         r = _make_result(reachable=False)
         assert r.quality_score == 0.0
 
-    def test_quality_score_fast(self):
+    def test_quality_score_no_latency_is_zero(self):
+        # reachable=True but latency_ms=None → 0 (conservative)
+        r = RealHealthResult(config=SAMPLE_CONFIG, protocol="vmess",
+                             reachable=True, latency_ms=None)
+        assert r.quality_score == 0.0
+
+    def test_quality_score_fast_is_100(self):
+        # ≤100ms → 100
         r = _make_result(latency=50.0)
         assert r.quality_score == 100.0
 
+    def test_quality_score_at_100ms_boundary(self):
+        r = _make_result(latency=100.0)
+        assert r.quality_score == 100.0
+
+    def test_quality_score_200ms(self):
+        # 200ms: 100 - (200-100)*(30/200) = 85
+        r = _make_result(latency=200.0)
+        assert r.quality_score == pytest.approx(85.0, abs=0.5)
+
+    def test_quality_score_300ms_boundary(self):
+        # 300ms: boundary → 70
+        r = _make_result(latency=300.0)
+        assert r.quality_score == pytest.approx(70.0, abs=0.5)
+
     def test_quality_score_medium(self):
+        # 200ms must be in good range
         r = _make_result(latency=200.0)
         assert 50.0 < r.quality_score < 100.0
 
+    def test_quality_score_1000ms_boundary(self):
+        # 1000ms → 20
+        r = _make_result(latency=1000.0)
+        assert r.quality_score == pytest.approx(20.0, abs=0.5)
+
     def test_quality_score_slow(self):
+        # 2000ms: in 1000-3000ms band → 20 - (2000-1000)*(20/2000) = 10
         r = _make_result(latency=2000.0)
-        assert 0.0 < r.quality_score < 50.0
+        assert r.quality_score == pytest.approx(10.0, abs=0.5)
+
+    def test_quality_score_at_3000ms_floor(self):
+        r = _make_result(latency=3000.0)
+        assert r.quality_score == 0.0
+
+    def test_quality_score_beyond_3000ms_stays_zero(self):
+        r = _make_result(latency=9999.0)
+        assert r.quality_score == 0.0
+
+    def test_quality_score_monotone_decreasing(self):
+        """Score must be non-increasing as latency grows."""
+        latencies = [50, 100, 200, 300, 500, 1000, 1500, 2000, 3000, 5000]
+        scores = [_make_result(latency=float(l)).quality_score for l in latencies]
+        for i in range(len(scores) - 1):
+            assert scores[i] >= scores[i + 1], (
+                f"Not monotone: {latencies[i]}ms={scores[i]} > "
+                f"{latencies[i+1]}ms={scores[i+1]}"
+            )
 
     def test_from_cache_default_false(self):
         r = _make_result()
@@ -164,11 +209,9 @@ class TestCheckerCache:
 
     def test_cache_miss_calls_xray(self, checker):
         """When no cache entry exists, xray layers must be invoked."""
-        mock_result = _make_result(reachable=True)
         checker.check_real_connectivity = AsyncMock(
             return_value=(True, 55.0, True, None)
         )
-        # Simulate successful xray context manager
         from contextlib import asynccontextmanager, contextmanager
 
         @contextmanager
@@ -214,7 +257,6 @@ class TestCheckerCache:
         asyncio.get_event_loop().run_until_complete(
             checker.check_server_real(SAMPLE_CONFIG)
         )
-        # Entry must be present with short TTL — verify via cache hit
         assert checker._cache.get(SAMPLE_CONFIG) is not None
 
     def test_clear_result_cache(self, checker):
@@ -295,14 +337,12 @@ class TestBatch:
     def test_backoff_applied_after_failures(self, checker):
         """Consecutive failures should trigger asyncio.sleep calls."""
         sleep_calls = []
-        original_sleep = asyncio.sleep
 
         async def _track_sleep(t):
             if t > 0:
                 sleep_calls.append(t)
 
         fail_result = _make_result(reachable=False)
-        # Return 3 failures so backoff kicks in for the 2nd and 3rd
         call_count = {"n": 0}
 
         async def _fake(config, protocol=None):
@@ -310,14 +350,13 @@ class TestBatch:
             return fail_result
 
         checker.check_server_real = _fake
-        checker.concurrent_limit = 1  # serial execution to get deterministic backoff
+        checker.concurrent_limit = 1  # serial execution for deterministic backoff
 
         servers = [(SAMPLE_CONFIG, "vmess")] * 3
         with patch("v2ray_finder.xray_connectivity.asyncio.sleep", side_effect=_track_sleep):
             asyncio.get_event_loop().run_until_complete(
                 checker.check_servers_real_batch(servers)
             )
-        # At least one backoff sleep should have been issued
         assert len(sleep_calls) >= 1
 
 

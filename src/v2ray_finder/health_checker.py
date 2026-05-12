@@ -8,6 +8,21 @@ Checks:
 
 Designed to be called *inline* during server discovery so that dead servers
 never reach the output list.
+
+Quality scoring
+---------------
+Both :class:`ServerHealth` and :class:`RealHealthResult` (xray_connectivity)
+use the same piecewise-linear latency curve:
+
+    ≤100 ms   → 100
+    ≤300 ms   → 100 → 70
+    ≤1000 ms  → 70  → 20
+    ≤3000 ms  → 20  → 0
+    >3000 ms  → 0
+    unreachable / INVALID → 0
+
+Note: UNREACHABLE now maps to 0 (was 10 previously).  This ensures that any
+live server — even with 3 000 ms latency — sorts above a dead one.
 """
 
 from __future__ import annotations
@@ -29,6 +44,30 @@ logger = logging.getLogger(__name__)
 
 _GOOGLE_204_URL = "http://clients3.google.com/generate_204"
 _GOOGLE_204_ALT = "http://connectivitycheck.gstatic.com/generate_204"
+
+
+# ---------------------------------------------------------------------------
+# Shared latency → score helper
+# ---------------------------------------------------------------------------
+
+def _latency_to_score(latency_ms: float) -> float:
+    """Piecewise-linear latency-to-score mapping (0–100).
+
+    ≤100 ms   → 100
+    ≤300 ms   → 100 → 70
+    ≤1000 ms  → 70  → 20
+    ≤3000 ms  → 20  → 0
+    >3000 ms  → 0
+    """
+    if latency_ms <= 100.0:
+        return 100.0
+    if latency_ms <= 300.0:
+        return 100.0 - (latency_ms - 100.0) * (30.0 / 200.0)
+    if latency_ms <= 1000.0:
+        return 70.0 - (latency_ms - 300.0) * (50.0 / 700.0)
+    if latency_ms <= 3000.0:
+        return 20.0 - (latency_ms - 1000.0) * (20.0 / 2000.0)
+    return 0.0
 
 
 class HealthStatus(Enum):
@@ -66,19 +105,18 @@ class ServerHealth:
 
     @property
     def quality_score(self) -> float:
-        """Compute quality score (0-100) from status and latency."""
-        if self.status == HealthStatus.INVALID:
+        """Compute quality score (0-100) from status and latency.
+
+        INVALID / UNREACHABLE → 0   (dead server must rank below any live one)
+        HEALTHY/DEGRADED, no latency → 50
+        HEALTHY/DEGRADED, latency present → piecewise-linear curve
+        """
+        if self.status in (HealthStatus.INVALID, HealthStatus.UNREACHABLE):
             return 0.0
-        if self.status == HealthStatus.UNREACHABLE:
-            return 10.0
         # HEALTHY or DEGRADED
         if self.latency_ms is None:
             return 50.0
-        if self.latency_ms <= 100.0:
-            return 100.0
-        # Linear decay: 100ms -> 100, 1000ms -> ~10
-        score = max(10.0, 100.0 - (self.latency_ms - 100.0) * (90.0 / 900.0))
-        return round(score, 1)
+        return round(max(0.0, _latency_to_score(self.latency_ms)), 1)
 
 
 class ServerValidator:
@@ -193,9 +231,8 @@ class ServerValidator:
                 decoded = base64.b64decode(padded).decode("utf-8", errors="replace")
             except Exception:
                 decoded = base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
-            # Fix: use raw string or explicit string instead of invalid escape \?
             if "/?obfsparam" in decoded or "/?" in decoded:
-                decoded = decoded.split("/?" )[0]
+                decoded = decoded.split("/?")[0]
             parts = decoded.split(":", 5)
             if len(parts) < 2:
                 return None

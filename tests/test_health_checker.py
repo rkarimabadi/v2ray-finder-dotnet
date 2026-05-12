@@ -48,9 +48,10 @@ def test_quality_score_invalid_is_zero():
     assert h.quality_score == 0.0
 
 
-def test_quality_score_unreachable_is_ten():
+def test_quality_score_unreachable_is_zero():
+    # UNREACHABLE must be 0 so that ANY live server sorts above a dead one.
     h = ServerHealth(config="x", protocol="?", status=HealthStatus.UNREACHABLE)
-    assert h.quality_score == 10.0
+    assert h.quality_score == 0.0
 
 
 def test_quality_score_no_latency_is_fifty():
@@ -61,27 +62,95 @@ def test_quality_score_no_latency_is_fifty():
 
 
 def test_quality_score_fast_latency_is_hundred():
+    # ≤100ms → 100
     h = ServerHealth(
         config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=50.0
     )
     assert h.quality_score == 100.0
 
 
-def test_quality_score_medium_latency():
-    # Formula: 100 - (latency - 100) * (90/900)
-    # 200ms -> 100 - 100 * 0.1 = 90.0
+def test_quality_score_at_100ms_boundary():
+    # Exactly 100ms is still 100
+    h = ServerHealth(
+        config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=100.0
+    )
+    assert h.quality_score == 100.0
+
+
+def test_quality_score_medium_latency_200ms():
+    # 200ms: in the 100-300ms band  → 100 - (200-100)*(30/200) = 100-15 = 85
     h = ServerHealth(
         config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=200.0
     )
-    assert 85.0 <= h.quality_score <= 95.0
+    assert h.quality_score == pytest.approx(85.0, abs=0.5)
 
 
-def test_quality_score_slow_latency_clamped():
-    # Formula: 100 - (1000 - 100) * (90/900) = 100 - 90 = 10 (floor)
+def test_quality_score_at_300ms_boundary():
+    # 300ms: boundary of good/acceptable band → 70
+    h = ServerHealth(
+        config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=300.0
+    )
+    assert h.quality_score == pytest.approx(70.0, abs=0.5)
+
+
+def test_quality_score_at_1000ms_boundary():
+    # 1000ms: boundary of acceptable/poor band → 20
     h = ServerHealth(
         config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=1000.0
     )
-    assert h.quality_score >= 10.0
+    assert h.quality_score == pytest.approx(20.0, abs=0.5)
+
+
+def test_quality_score_at_3000ms_floor():
+    # 3000ms → exactly 0
+    h = ServerHealth(
+        config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=3000.0
+    )
+    assert h.quality_score == 0.0
+
+
+def test_quality_score_beyond_3000ms_still_zero():
+    # Any latency > 3000ms must stay at 0 (no negative scores)
+    h = ServerHealth(
+        config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=9999.0
+    )
+    assert h.quality_score == 0.0
+
+
+def test_quality_score_slow_latency_above_floor():
+    # 1000ms → 20, well above 0
+    h = ServerHealth(
+        config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=1000.0
+    )
+    assert h.quality_score >= 20.0
+
+
+def test_quality_score_live_server_beats_dead_server():
+    # Any live server (even very slow) must outscore a dead one
+    slow_live = ServerHealth(
+        config="x", protocol="vmess", status=HealthStatus.HEALTHY, latency_ms=2999.0
+    )
+    dead = ServerHealth(
+        config="y", protocol="vmess", status=HealthStatus.UNREACHABLE
+    )
+    assert slow_live.quality_score > dead.quality_score
+
+
+def test_quality_score_monotone_decreasing():
+    """Score must be non-increasing as latency grows."""
+    latencies = [50, 100, 200, 300, 500, 1000, 1500, 2000, 3000, 5000]
+    scores = [
+        ServerHealth(
+            config="x", protocol="vmess", status=HealthStatus.HEALTHY,
+            latency_ms=float(l)
+        ).quality_score
+        for l in latencies
+    ]
+    for i in range(len(scores) - 1):
+        assert scores[i] >= scores[i + 1], (
+            f"Score not monotone at {latencies[i]}ms ({scores[i]}) "
+            f"→ {latencies[i+1]}ms ({scores[i+1]})"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +341,7 @@ async def test_check_server_health_unreachable():
     assert result.status == HealthStatus.UNREACHABLE
     assert result.tcp_ok is False
     assert result.error == "Connection refused"
+    assert result.quality_score == 0.0
 
 
 @pytest.mark.asyncio
@@ -288,6 +358,8 @@ async def test_check_server_health_degraded_high_latency():
         result = await checker.check_server_health(vmess_config, "vmess")
 
     assert result.status == HealthStatus.DEGRADED
+    # 600ms: in 300-1000ms band → 70 - (600-300)*(50/700) ≈ 48.6
+    assert 40.0 < result.quality_score < 60.0
 
 
 # ---------------------------------------------------------------------------
