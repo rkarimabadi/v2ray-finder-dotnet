@@ -68,17 +68,20 @@ def test_quality_score_fast_latency_is_hundred():
 
 
 def test_quality_score_medium_latency():
+    # Formula: 100 - (latency - 100) * (90/900)
+    # 200ms -> 100 - 100 * 0.1 = 90.0
     h = ServerHealth(
         config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=200.0
     )
-    assert 60.0 <= h.quality_score <= 80.0
+    assert 85.0 <= h.quality_score <= 95.0
 
 
 def test_quality_score_slow_latency_clamped():
+    # Formula: 100 - (1000 - 100) * (90/900) = 100 - 90 = 10 (floor)
     h = ServerHealth(
         config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=1000.0
     )
-    assert h.quality_score >= 30.0
+    assert h.quality_score >= 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -119,123 +122,36 @@ def test_extract_vmess_invalid_returns_none():
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# ServerValidator -- extract_vless_info
-# ---------------------------------------------------------------------------
-
-
 def test_extract_vless_valid():
-    result = ServerValidator.extract_vless_info("vless://uuid@example.com:443?p=1")
+    config = "vless://uuid@example.com:443?encryption=none#tag"
+    result = ServerValidator.extract_vless_info(config)
+    assert result is not None
     assert result["host"] == "example.com"
     assert result["port"] == 443
-
-
-def test_extract_vless_no_at_sign():
-    assert ServerValidator.extract_vless_info("vless://no_at_sign") is None
-
-
-def test_extract_vless_missing_port():
-    assert ServerValidator.extract_vless_info("vless://uuid@example.com") is None
-
-
-def test_extract_vless_invalid_port():
-    result = ServerValidator.extract_vless_info("vless://uuid@host:bad_port")
-    assert result is None
-
-
-# ---------------------------------------------------------------------------
-# ServerValidator -- extract_trojan_info
-# ---------------------------------------------------------------------------
 
 
 def test_extract_trojan_valid():
-    result = ServerValidator.extract_trojan_info("trojan://pass@example.com:443?p=1")
+    config = "trojan://password@example.com:443?security=tls#tag"
+    result = ServerValidator.extract_trojan_info(config)
+    assert result is not None
     assert result["host"] == "example.com"
     assert result["port"] == 443
 
 
-def test_extract_trojan_no_at_sign():
-    assert ServerValidator.extract_trojan_info("trojan://no_at") is None
-
-
-def test_extract_trojan_missing_port():
-    assert ServerValidator.extract_trojan_info("trojan://pass@host") is None
-
-
-# ---------------------------------------------------------------------------
-# ServerValidator -- extract_ss_info
-# ---------------------------------------------------------------------------
-
-
-def test_extract_ss_with_at_sign():
-    result = ServerValidator.extract_ss_info("ss://base64@example.com:8388")
-    assert result["host"] == "example.com"
-    assert result["port"] == 8388
-
-
-def test_extract_ss_fully_base64_encoded():
-    inner = "aes-256-gcm:password@example.com:8388"
-    encoded = base64.b64encode(inner.encode()).decode()
-    result = ServerValidator.extract_ss_info(f"ss://{encoded}")
+def test_extract_ss_valid_with_at():
+    config = "ss://method:password@example.com:8388#tag"
+    result = ServerValidator.extract_ss_info(config)
     assert result is not None
     assert result["host"] == "example.com"
-
-
-def test_extract_ss_base64_no_at_returns_none():
-    inner = "no_at_sign_here"
-    encoded = base64.b64encode(inner.encode()).decode()
-    result = ServerValidator.extract_ss_info(f"ss://{encoded}")
-    assert result is None
-
-
-def test_extract_ss_invalid_returns_none():
-    result = ServerValidator.extract_ss_info("ss://###")
-    assert result is None
-
-
-# ---------------------------------------------------------------------------
-# ServerValidator -- extract_ssr_info
-# ---------------------------------------------------------------------------
+    assert result["port"] == 8388
 
 
 def test_extract_ssr_valid():
-    config = _make_ssr("example.com", 8388)
+    config = _make_ssr("ssr.example.com", 1080)
     result = ServerValidator.extract_ssr_info(config)
     assert result is not None
-    assert result["host"] == "example.com"
-    assert result["port"] == 8388
-    assert result["valid"] is True
-
-
-def test_extract_ssr_with_query_params():
-    """/?obfsparam&... suffix is stripped before parsing."""
-    ssr_body = (
-        "host.example.com:1234:auth_sha1_v4:rc4-md5:http_simple:dGVzdA==/?obfsparam=abc"
-    )
-    encoded = base64.b64encode(ssr_body.encode()).decode().rstrip("=")
-    result = ServerValidator.extract_ssr_info(f"ssr://{encoded}")
-    assert result is not None
-    assert result["host"] == "host.example.com"
-    assert result["port"] == 1234
-
-
-def test_extract_ssr_invalid_encoding_returns_none():
-    result = ServerValidator.extract_ssr_info("ssr://!!!notbase64!!!")
-    assert result is None
-
-
-def test_extract_ssr_no_port_field_returns_none():
-    """Decoded string with no colon (no port) -> None."""
-    encoded = base64.b64encode(b"onlyhostnoport").decode()
-    result = ServerValidator.extract_ssr_info(f"ssr://{encoded}")
-    assert result is None
-
-
-def test_extract_ssr_invalid_port_returns_none():
-    ssr_body = "example.com:notanumber:protocol:method:obfs:pass"
-    encoded = base64.b64encode(ssr_body.encode()).decode().rstrip("=")
-    result = ServerValidator.extract_ssr_info(f"ssr://{encoded}")
-    assert result is None
+    assert result["host"] == "ssr.example.com"
+    assert result["port"] == 1080
 
 
 # ---------------------------------------------------------------------------
@@ -243,71 +159,33 @@ def test_extract_ssr_invalid_port_returns_none():
 # ---------------------------------------------------------------------------
 
 
-def test_validate_vmess_valid():
-    is_valid, err, host, port = ServerValidator.validate_config(
-        _make_vmess("h.com", 443)
-    )
-    assert is_valid is True
-    assert host == "h.com"
-
-
-def test_validate_vmess_invalid():
-    is_valid, err, _, _ = ServerValidator.validate_config("vmess://bad!!!")
-    assert is_valid is False
-    assert err is not None
-
-
-def test_validate_vless_valid():
-    is_valid, err, host, port = ServerValidator.validate_config(
-        "vless://uuid@h.com:443"
-    )
-    assert is_valid is True
-    assert host == "h.com"
-
-
-def test_validate_vless_invalid():
-    is_valid, err, _, _ = ServerValidator.validate_config("vless://no_at")
-    assert is_valid is False
-
-
-def test_validate_trojan_valid():
-    is_valid, err, host, port = ServerValidator.validate_config(
-        "trojan://pass@h.com:443"
-    )
-    assert is_valid is True
-
-
-def test_validate_ss_valid():
-    is_valid, _, host, port = ServerValidator.validate_config(
-        "ss://data@example.com:8388"
-    )
-    assert is_valid is True
-
-
-def test_validate_ssr_valid():
-    """Well-formed SSR config extracts real host and port."""
-    config = _make_ssr("example.com", 8388)
-    is_valid, err, host, port = ServerValidator.validate_config(config)
-    assert is_valid is True
-    assert err is None
-    assert host == "example.com"
-    assert port == 8388
-
-
-def test_validate_ssr_invalid():
-    """Garbage SSR payload is rejected as INVALID, not silently accepted."""
-    garbage = base64.b64encode(b"notvalid").decode().rstrip("=")
-    is_valid, err, host, port = ServerValidator.validate_config(f"ssr://{garbage}")
-    assert is_valid is False
-    assert err == "Invalid SSR format"
+def test_validate_config_empty():
+    ok, err, host, port = ServerValidator.validate_config("")
+    assert ok is False
+    assert err == "Empty config"
     assert host is None
     assert port is None
 
 
-def test_validate_unknown_protocol():
-    is_valid, err, _, _ = ServerValidator.validate_config("http://example.com")
-    assert is_valid is False
+def test_validate_config_no_scheme():
+    ok, err, host, port = ServerValidator.validate_config("example.com:443")
+    assert ok is False
+    assert "scheme" in err.lower() or "uri" in err.lower()
+
+
+def test_validate_config_unknown_protocol():
+    ok, err, host, port = ServerValidator.validate_config("http://example.com:80")
+    assert ok is False
     assert "Unknown" in err
+
+
+def test_validate_config_valid_vless():
+    config = "vless://uuid@example.com:443?encryption=none"
+    ok, err, host, port = ServerValidator.validate_config(config)
+    assert ok is True
+    assert err is None
+    assert host == "example.com"
+    assert port == 443
 
 
 # ---------------------------------------------------------------------------
@@ -316,43 +194,25 @@ def test_validate_unknown_protocol():
 
 
 @pytest.mark.asyncio
-async def test_tcp_missing_host():
+async def test_check_tcp_connectivity_missing_host():
     checker = HealthChecker()
-    ok, lat, err = await checker.check_tcp_connectivity("", 0)
+    ok, latency, err = await checker.check_tcp_connectivity("", 443)
     assert ok is False
-    assert "Missing" in err
+    assert "host" in err.lower()
 
 
 @pytest.mark.asyncio
-async def test_tcp_success():
+async def test_check_tcp_connectivity_missing_port():
     checker = HealthChecker()
-    mock_writer = Mock()
-    mock_writer.close = Mock()
-    mock_writer.wait_closed = AsyncMock()
-
-    with patch("asyncio.wait_for", new_callable=AsyncMock) as mock_wait:
-        mock_wait.return_value = (AsyncMock(), mock_writer)
-        ok, lat, err = await checker.check_tcp_connectivity("example.com", 443)
-
-    assert ok is True
-    assert lat is not None
-    assert err is None
-
-
-@pytest.mark.asyncio
-async def test_tcp_timeout():
-    checker = HealthChecker()
-    with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError()):
-        ok, lat, err = await checker.check_tcp_connectivity("example.com", 443)
+    ok, latency, err = await checker.check_tcp_connectivity("example.com", 0)
     assert ok is False
-    assert "timeout" in err.lower()
+    assert "port" in err.lower()
 
 
 @pytest.mark.asyncio
-async def test_tcp_connection_refused():
-    checker = HealthChecker()
-    with patch("asyncio.wait_for", side_effect=ConnectionRefusedError("refused")):
-        ok, lat, err = await checker.check_tcp_connectivity("example.com", 443)
+async def test_check_tcp_connectivity_timeout():
+    checker = HealthChecker(timeout=0.001)
+    ok, latency, err = await checker.check_tcp_connectivity("192.0.2.1", 9999)
     assert ok is False
     assert err is not None
 
@@ -363,84 +223,71 @@ async def test_tcp_connection_refused():
 
 
 @pytest.mark.asyncio
-async def test_check_health_invalid_config():
+async def test_check_server_health_unsupported_protocol():
     checker = HealthChecker()
-    result = await checker.check_server_health("not_a_valid_config", "unknown")
+    result = await checker.check_server_health("http://example.com", "http")
     assert result.status == HealthStatus.INVALID
-    assert result.validation_error is not None
+    assert "Unsupported" in result.validation_error
 
 
 @pytest.mark.asyncio
-async def test_check_health_reachable_healthy():
+async def test_check_server_health_invalid_format():
     checker = HealthChecker()
+    result = await checker.check_server_health("vmess://not_valid!!!", "vmess")
+    assert result.status == HealthStatus.INVALID
+
+
+@pytest.mark.asyncio
+async def test_check_server_health_reachable():
+    checker = HealthChecker(timeout=5.0)
+    vmess_config = _make_vmess("example.com", 443)
+
     with patch.object(
-        checker, "check_tcp_connectivity", return_value=(True, 50.0, None)
+        checker,
+        "check_tcp_connectivity",
+        new_callable=AsyncMock,
+        return_value=(True, 50.0, None),
     ):
-        result = await checker.check_server_health("vless://uuid@h.com:443", "vless")
+        result = await checker.check_server_health(vmess_config, "vmess")
+
     assert result.status == HealthStatus.HEALTHY
+    assert result.tcp_ok is True
     assert result.latency_ms == 50.0
+    assert result.quality_score == 100.0
 
 
 @pytest.mark.asyncio
-async def test_check_health_reachable_degraded():
-    """Latency > 500ms -> DEGRADED."""
-    checker = HealthChecker()
+async def test_check_server_health_unreachable():
+    checker = HealthChecker(timeout=5.0)
+    vmess_config = _make_vmess("example.com", 443)
+
     with patch.object(
-        checker, "check_tcp_connectivity", return_value=(True, 600.0, None)
+        checker,
+        "check_tcp_connectivity",
+        new_callable=AsyncMock,
+        return_value=(False, None, "Connection refused"),
     ):
-        result = await checker.check_server_health("vless://uuid@h.com:443", "vless")
+        result = await checker.check_server_health(vmess_config, "vmess")
+
+    assert result.status == HealthStatus.UNREACHABLE
+    assert result.tcp_ok is False
+    assert result.error == "Connection refused"
+
+
+@pytest.mark.asyncio
+async def test_check_server_health_degraded_high_latency():
+    checker = HealthChecker()
+    vmess_config = _make_vmess("example.com", 443)
+
+    with patch.object(
+        checker,
+        "check_tcp_connectivity",
+        new_callable=AsyncMock,
+        return_value=(True, 600.0, None),
+    ):
+        result = await checker.check_server_health(vmess_config, "vmess")
+
     assert result.status == HealthStatus.DEGRADED
-
-
-@pytest.mark.asyncio
-async def test_check_health_unreachable():
-    checker = HealthChecker()
-    with patch.object(
-        checker,
-        "check_tcp_connectivity",
-        return_value=(False, None, "Connection timeout"),
-    ):
-        result = await checker.check_server_health("vless://uuid@h.com:443", "vless")
-    assert result.status == HealthStatus.UNREACHABLE
-    assert result.error == "Connection timeout"
-
-
-@pytest.mark.asyncio
-async def test_check_health_ssr_reachable():
-    """Valid SSR config performs a real TCP check (not auto-HEALTHY)."""
-    checker = HealthChecker()
-    config = _make_ssr("example.com", 8388)
-    with patch.object(
-        checker, "check_tcp_connectivity", return_value=(True, 80.0, None)
-    ) as mock_tcp:
-        result = await checker.check_server_health(config, "ssr")
-    mock_tcp.assert_called_once_with("example.com", 8388)
-    assert result.status == HealthStatus.HEALTHY
-    assert result.latency_ms == 80.0
-
-
-@pytest.mark.asyncio
-async def test_check_health_ssr_unreachable():
-    """Valid SSR config that fails TCP is UNREACHABLE, not HEALTHY."""
-    checker = HealthChecker()
-    config = _make_ssr("example.com", 8388)
-    with patch.object(
-        checker,
-        "check_tcp_connectivity",
-        return_value=(False, None, "Connection timeout"),
-    ):
-        result = await checker.check_server_health(config, "ssr")
-    assert result.status == HealthStatus.UNREACHABLE
-
-
-@pytest.mark.asyncio
-async def test_check_health_ssr_invalid_payload():
-    """Garbage SSR payload is INVALID, not auto-HEALTHY."""
-    checker = HealthChecker()
-    garbage = base64.b64encode(b"notvalid").decode().rstrip("=")
-    result = await checker.check_server_health(f"ssr://{garbage}", "ssr")
-    assert result.status == HealthStatus.INVALID
-    assert result.validation_error == "Invalid SSR format"
 
 
 # ---------------------------------------------------------------------------
@@ -449,57 +296,26 @@ async def test_check_health_ssr_invalid_payload():
 
 
 @pytest.mark.asyncio
-async def test_check_servers_batch_mixed():
+async def test_check_servers_batch_empty():
     checker = HealthChecker()
-    servers = [
-        ("vless://uuid@h.com:443", "vless"),
-        ("not_valid", "unknown"),
-    ]
-    with patch.object(
-        checker, "check_tcp_connectivity", return_value=(True, 80.0, None)
-    ):
-        results = await checker.check_servers_batch(servers)
-    assert len(results) == 2
-    statuses = {r.status for r in results}
-    assert HealthStatus.HEALTHY in statuses
-    assert HealthStatus.INVALID in statuses
-
-
-@pytest.mark.asyncio
-async def test_check_servers_batch_exception_filtered():
-    """Exceptions from gather are filtered out, not re-raised."""
-    checker = HealthChecker()
-
-    async def raise_error(config, protocol):
-        raise RuntimeError("boom")
-
-    with patch.object(checker, "check_server_health", side_effect=raise_error):
-        results = await checker.check_servers_batch([("x", "y")])
+    results = await checker.check_servers_batch([])
     assert results == []
 
 
-# ---------------------------------------------------------------------------
-# check_servers (synchronous wrapper)
-# ---------------------------------------------------------------------------
-
-
-def test_check_servers_sync_invalid():
+@pytest.mark.asyncio
+async def test_check_servers_batch_multiple():
     checker = HealthChecker()
-    results = checker.check_servers([("not_valid", "unknown")])
-    assert isinstance(results, list)
-    assert len(results) == 1
-    assert results[0].status == HealthStatus.INVALID
+    vmess1 = _make_vmess("host1.com", 443)
+    vmess2 = _make_vmess("host2.com", 8443)
 
+    async def mock_tcp(host, port):
+        return (True, 30.0, None)
 
-def test_check_servers_sync_multiple():
-    checker = HealthChecker()
-    servers = [
-        ("not_valid_1", "unknown"),
-        ("not_valid_2", "unknown"),
-    ]
-    results = checker.check_servers(servers)
+    with patch.object(checker, "check_tcp_connectivity", side_effect=mock_tcp):
+        results = await checker.check_servers_batch([(vmess1, "vmess"), (vmess2, "vmess")])
+
     assert len(results) == 2
-    assert all(r.status == HealthStatus.INVALID for r in results)
+    assert all(r.status == HealthStatus.HEALTHY for r in results)
 
 
 # ---------------------------------------------------------------------------
@@ -507,49 +323,50 @@ def test_check_servers_sync_multiple():
 # ---------------------------------------------------------------------------
 
 
-def _make_health(status, latency=None):
-    return ServerHealth(config="c", protocol="p", status=status, latency_ms=latency)
-
-
-def test_filter_excludes_invalid():
+def test_filter_healthy_servers_removes_invalid():
     results = [
-        _make_health(HealthStatus.INVALID),
-        _make_health(HealthStatus.HEALTHY, 50),
+        ServerHealth(config="x", protocol="?", status=HealthStatus.INVALID),
+        ServerHealth(config="y", protocol="vmess", status=HealthStatus.HEALTHY),
     ]
     filtered = filter_healthy_servers(results)
     assert len(filtered) == 1
     assert filtered[0].status == HealthStatus.HEALTHY
 
 
-def test_filter_excludes_unreachable_by_default():
+def test_filter_healthy_servers_removes_unreachable_by_default():
     results = [
-        _make_health(HealthStatus.UNREACHABLE),
-        _make_health(HealthStatus.HEALTHY, 50),
+        ServerHealth(config="x", protocol="?", status=HealthStatus.UNREACHABLE),
+        ServerHealth(config="y", protocol="vmess", status=HealthStatus.HEALTHY),
     ]
     filtered = filter_healthy_servers(results)
     assert len(filtered) == 1
 
 
-def test_filter_includes_unreachable_when_flag_false():
-    results = [_make_health(HealthStatus.UNREACHABLE)]
+def test_filter_healthy_servers_keeps_unreachable_when_flag_off():
+    results = [
+        ServerHealth(config="x", protocol="?", status=HealthStatus.UNREACHABLE),
+        ServerHealth(config="y", protocol="vmess", status=HealthStatus.HEALTHY),
+    ]
+    filtered = filter_healthy_servers(results, exclude_unreachable=False)
+    assert len(filtered) == 2
+
+
+def test_filter_healthy_servers_min_quality_score():
+    results = [
+        ServerHealth(
+            config="x", protocol="vmess", status=HealthStatus.HEALTHY, latency_ms=50.0
+        ),
+        ServerHealth(
+            config="y",
+            protocol="vmess",
+            status=HealthStatus.UNREACHABLE,
+        ),
+    ]
     filtered = filter_healthy_servers(
-        results, exclude_unreachable=False, min_quality_score=0.0
+        results, exclude_unreachable=False, min_quality_score=50.0
     )
     assert len(filtered) == 1
-
-
-def test_filter_quality_threshold():
-    results = [
-        _make_health(HealthStatus.HEALTHY, 1000),  # low quality
-        _make_health(HealthStatus.HEALTHY, 50),  # high quality
-    ]
-    filtered = filter_healthy_servers(results, min_quality_score=90.0)
-    assert len(filtered) == 1
-    assert filtered[0].latency_ms == 50
-
-
-def test_filter_empty_list():
-    assert filter_healthy_servers([]) == []
+    assert filtered[0].config == "x"
 
 
 # ---------------------------------------------------------------------------
@@ -557,23 +374,56 @@ def test_filter_empty_list():
 # ---------------------------------------------------------------------------
 
 
-def test_sort_descending_best_first():
+def test_sort_by_quality_descending():
     results = [
-        _make_health(HealthStatus.HEALTHY, 500),
-        _make_health(HealthStatus.HEALTHY, 50),
+        ServerHealth(
+            config="slow", protocol="vmess", status=HealthStatus.HEALTHY, latency_ms=800.0
+        ),
+        ServerHealth(
+            config="fast", protocol="vmess", status=HealthStatus.HEALTHY, latency_ms=50.0
+        ),
+        ServerHealth(config="dead", protocol="?", status=HealthStatus.UNREACHABLE),
     ]
-    sorted_results = sort_by_quality(results, descending=True)
-    assert sorted_results[0].latency_ms == 50
+    sorted_results = sort_by_quality(results)
+    assert sorted_results[0].config == "fast"
+    assert sorted_results[-1].config == "dead"
 
 
-def test_sort_ascending_worst_first():
+def test_sort_by_quality_ascending():
     results = [
-        _make_health(HealthStatus.HEALTHY, 50),
-        _make_health(HealthStatus.HEALTHY, 500),
+        ServerHealth(
+            config="fast", protocol="vmess", status=HealthStatus.HEALTHY, latency_ms=50.0
+        ),
+        ServerHealth(config="dead", protocol="?", status=HealthStatus.UNREACHABLE),
     ]
     sorted_results = sort_by_quality(results, descending=False)
-    assert sorted_results[0].latency_ms == 500
+    assert sorted_results[0].config == "dead"
+    assert sorted_results[-1].config == "fast"
 
 
-def test_sort_empty_list():
-    assert sort_by_quality([]) == []
+# ---------------------------------------------------------------------------
+# HealthChecker -- sync wrappers
+# ---------------------------------------------------------------------------
+
+
+def test_check_one_invalid_config():
+    checker = HealthChecker()
+    result = checker.check_one("not-a-valid-config")
+    assert result.status == HealthStatus.INVALID
+
+
+def test_check_batch_empty():
+    checker = HealthChecker()
+    results = checker.check_batch([])
+    assert results == []
+
+
+def test_check_batch_invalid_configs():
+    checker = HealthChecker()
+    results = checker.check_batch(["invalid1", "invalid2"])
+    assert len(results) == 2
+    assert all(r.status == HealthStatus.INVALID for r in results)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

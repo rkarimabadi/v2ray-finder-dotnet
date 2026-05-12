@@ -43,7 +43,8 @@ def test_health_checker_classes_instantiate():
     checker = HealthChecker()
     assert checker is not None
     assert checker.timeout == 5.0
-    assert checker.concurrent_limit == 50
+    # HealthChecker uses max_workers (not concurrent_limit)
+    assert checker.max_workers == 50
 
     validator = ServerValidator()
     assert validator is not None
