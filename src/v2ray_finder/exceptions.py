@@ -121,6 +121,7 @@ class RateLimitError(GitHubAPIError):
         limit: Optional[int] = None,
         remaining: Optional[int] = None,
         reset_time: Optional[int] = None,
+        reset_at=None,
     ):
         details = {}
         if limit is not None:
@@ -132,6 +133,8 @@ class RateLimitError(GitHubAPIError):
             from datetime import datetime
 
             details["reset_at"] = datetime.fromtimestamp(reset_time).isoformat()
+        if reset_at is not None and "reset_at" not in details:
+            details["reset_at"] = str(reset_at)
 
         super().__init__(
             message,
@@ -139,6 +142,10 @@ class RateLimitError(GitHubAPIError):
             error_type=ErrorType.RATE_LIMIT_EXCEEDED,
             **details,
         )
+
+
+# Alias used by core.py — GitHubRateLimitError is the same as RateLimitError
+GitHubRateLimitError = RateLimitError
 
 
 class AuthenticationError(GitHubAPIError):
