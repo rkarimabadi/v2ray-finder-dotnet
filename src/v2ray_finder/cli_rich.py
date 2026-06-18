@@ -1,625 +1,532 @@
-"""Rich CLI interface for v2ray-finder."""
+"""Rich CLI interface for v2ray-finder — Pipeline edition (V2-P1).
+
+All fetch / health / score work is delegated to :class:`~pipeline.Pipeline`.
+Progress is driven by the ``progress_callback`` protocol::
+
+    callback(stage: str, current: int, total: int, message: str) -> None
+
+where ``stage`` is one of ``"fetch"``, ``"health"``, ``"score"``.
+
+Non-interactive mode
+---------------------
+::
+
+    v2ray-finder-rich -o servers.txt          # quick fetch + save
+    v2ray-finder-rich -o servers.txt -c       # with health checks
+    v2ray-finder-rich --stats-only            # stats only, no file
+    v2ray-finder-rich --cache                 # enable source caching
+    v2ray-finder-rich --cache-ttl 1800        # 30-min cache TTL
+
+Interactive mode (default when -o / --stats-only absent)
+---------------------------------------------------------
+::
+
+    v2ray-finder-rich                         # interactive TUI
+"""
+
+from __future__ import annotations
 
 import argparse
 import os
 import signal
 import sys
 import threading
-from getpass import getpass
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
-from rich import box
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
-from rich.prompt import Confirm, IntPrompt, Prompt
-from rich.table import Table
+try:
+    from rich import box
+    from rich.console import Console
+    from rich.live import Live
+    from rich.markdown import Markdown
+    from rich.panel import Panel
+    from rich.progress import (
+        BarColumn,
+        MofNCompleteColumn,
+        Progress,
+        SpinnerColumn,
+        TaskID,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+    from rich.prompt import Confirm, IntPrompt, Prompt
+    from rich.table import Table
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
 
-from .core import V2RayServerFinder
-
-console = Console()
-
-# Module-level reference so the signal handler can reach the active finder.
-_active_finder: Optional[V2RayServerFinder] = None
+from .pipeline import Pipeline, PipelineResult, StopController
 
 
-def _signal_handler(signum: int, frame) -> None:  # noqa: ANN001
-    """
-    SIGINT handler.
+# ---------------------------------------------------------------------------
+# Console singleton
+# ---------------------------------------------------------------------------
 
-    Calls ``finder.request_stop()`` so that all core loops honour
-    ``should_stop()`` as soon as the current blocking ``requests.get()``
-    returns.  The KeyboardInterrupt is then re-raised so the normal
-    ``except KeyboardInterrupt`` paths in the callers can save partial
-    results and exit cleanly.
-    """
-    if _active_finder is not None:
-        _active_finder.request_stop()
-    # Re-raise as KeyboardInterrupt so callers can handle it normally.
+console = Console() if RICH_AVAILABLE else None  # type: ignore[assignment]
+
+
+def _print(msg: str, markup: bool = True) -> None:
+    """Print via Rich console when available, else plain print."""
+    if RICH_AVAILABLE and console is not None:
+        console.print(msg, markup=markup)
+    else:
+        import re
+        plain = re.sub(r"\[/?[^\]]+]", "", msg)
+        print(plain)
+
+
+# ---------------------------------------------------------------------------
+# Global stop controller (module-level so SIGINT handler can reach it)
+# ---------------------------------------------------------------------------
+
+_stop_ctrl: Optional[StopController] = None
+
+
+def _signal_handler(signum: int, frame: Any) -> None:  # noqa: ANN001
+    """SIGINT → stop the active pipeline gracefully."""
+    if _stop_ctrl is not None:
+        _stop_ctrl.stop()
     raise KeyboardInterrupt
 
 
-class StopController:
+# ---------------------------------------------------------------------------
+# Rich progress builder
+# ---------------------------------------------------------------------------
+
+class PipelineProgress:
+    """Maps pipeline ``progress_callback`` events onto Rich Progress bars.
+
+    Three named tasks are pre-created (one per stage).  Each ``__call__``
+    updates the matching task so the bars advance live.
+
+    When Rich is not installed the callback is a no-op and all output falls
+    back to plain ``print()``.
     """
-    Thread-safe stop controller for **non-interactive** Rich CLI mode only.
 
-    Mirrors the plain CLI ``StopController``: starts a daemon thread that
-    blocks on ``input()`` and calls ``finder.request_stop()`` when the user
-    types ``q`` + Enter.  Must NOT be used while the main thread is also
-    calling ``input()`` (i.e. in interactive mode).
-    """
-
-    def __init__(self, finder: V2RayServerFinder) -> None:
-        self._finder = finder
-        self._active = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-
-    def start(self) -> None:
-        """Reset finder stop flag and start the background listener thread."""
-        self._finder.reset_stop()
-        self._active.set()
-        console.print(
-            "\n[dim]Press 'q' + Enter at any time to stop and save partial results[/dim]\n"
-        )
-        self._thread = threading.Thread(
-            target=self._listen, daemon=True, name="RichStopListener"
-        )
-        self._thread.start()
-
-    def _listen(self) -> None:
-        """Background thread: read stdin, call request_stop() on 'q'.
-
-        Exits immediately when stdin is not a real tty (e.g. during pytest
-        capture) to avoid 'OSError: pytest: reading from stdin while output
-        is captured!' warnings.
-        """
-        if not sys.stdin.isatty():
-            self._active.clear()
+    def __init__(self) -> None:
+        if not RICH_AVAILABLE:
+            self._progress = None
+            self._tasks: Dict[str, Any] = {}
             return
-        while self._active.is_set():
-            try:
-                key = input().strip().lower()
-                if key == "q":
-                    console.print(
-                        "\n[yellow]\u26a0[/yellow] Stop requested \u2014 "
-                        "finishing current request..."
-                    )
-                    self._finder.request_stop()
-                    self._active.clear()
-                    break
-            except (EOFError, OSError):
-                self._active.clear()
-                break
 
-    def stop(self) -> None:
-        """Signal the listener to exit (non-blocking; thread is daemon)."""
-        self._active.clear()
+        self._progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(bar_width=30),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=console,
+            transient=False,
+        )
+        self._tasks: Dict[str, TaskID] = {}
 
+    # context manager
+    def __enter__(self) -> "PipelineProgress":
+        if self._progress is not None:
+            self._progress.__enter__()
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        if self._progress is not None:
+            self._progress.__exit__(*args)
+
+    # callback — called by Pipeline.run()
+    def __call__(
+        self,
+        stage: str,
+        current: int,
+        total: int,
+        message: str,
+    ) -> None:
+        if self._progress is None:
+            # no Rich — just print stage transitions
+            if current == 0:
+                print(f"[{stage}] {message}")
+            return
+
+        label_map = {
+            "fetch":  "[cyan]Fetching sources[/cyan]",
+            "health": "[yellow]Health checks[/yellow]",
+            "score":  "[green]Scoring[/green]",
+        }
+        label = label_map.get(stage, stage)
+
+        if stage not in self._tasks:
+            t = self._progress.add_task(
+                label,
+                total=max(total, 1),
+            )
+            self._tasks[stage] = t
+        else:
+            t = self._tasks[stage]
+            self._progress.update(t, total=max(total, 1))
+
+        self._progress.update(t, completed=current, description=f"{label} — {message}")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def print_welcome() -> None:
-    """Print welcome banner."""
-    welcome = """
-# v2ray-finder (Rich Edition) \u2728
-
-**Fetch V2Ray servers from GitHub and curated sources**
-    """
-    console.print(Markdown(welcome))
+    if not RICH_AVAILABLE:
+        print("=== v2ray-finder (Rich Edition) ===")
+        return
+    console.print(Markdown("# v2ray-finder \u2728\n**Fetch V2Ray servers from curated sources**"))
     console.print(Panel("\u2764\ufe0f for freedom", style="bold cyan", box=box.ROUNDED))
 
 
-def prompt_for_token() -> Optional[str]:
-    """Prompt user for GitHub token with Rich styling."""
-    console.print("\n[bold cyan]\U0001f511 GitHub Token Setup[/bold cyan]")
-    console.print(
-        "A GitHub token increases rate limits from [red]60[/red] to "
-        "[green]5000[/green] requests/hour."
-    )
-    console.print(
-        "[dim]Your token will NOT be stored and is only used for this session.[/dim]\n"
-    )
-
-    use_token = Confirm.ask("Do you want to provide a GitHub token?", default=False)
-    if not use_token:
-        console.print("[blue]i[/blue] Continuing without authentication\n")
-        return None
-
-    console.print("\n[dim]Paste your GitHub token (input will be hidden):[/dim]")
-    token = getpass("Token: ").strip()
-    if token:
-        console.print("[green]\u2713[/green] Token received\n")
-        return token
-
-    console.print(
-        "[yellow]![/yellow] No token provided, continuing without authentication\n"
-    )
-    return None
+def _configs_from_result(result: PipelineResult, limit: int = 0) -> List[str]:
+    """Return ordered config strings from a PipelineResult."""
+    configs = result.top_configs if result.scores else result.configs
+    if limit and limit > 0:
+        configs = configs[:limit]
+    return configs
 
 
-def save_partial_results(
-    servers: List, filename: str = "v2ray_servers_partial.txt"
+def show_stats(
+    configs: List[str],
+    result: Optional[PipelineResult] = None,
+    show_health: bool = False,
 ) -> None:
-    """Save partial results with a Rich progress bar."""
-    if not servers:
-        console.print("[yellow]![/yellow] No servers to save")
+    """Display statistics using Rich tables (or plain text as fallback)."""
+    if not configs:
+        _print("[yellow]! No servers found[/yellow]")
         return
 
-    try:
-        if servers and isinstance(servers[0], dict):
-            configs: List[str] = [
-                s.get("config", "") for s in servers if s.get("config")
-            ]
-        else:
-            configs = list(servers)
+    protocols: Dict[str, int] = {}
+    for cfg in configs:
+        proto = cfg.split("://")[0].lower() if "://" in cfg else "unknown"
+        protocols[proto] = protocols.get(proto, 0) + 1
 
-        with Progress(
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task(
-                "[yellow]Saving partial results...[/yellow]", total=len(configs)
-            )
-            with open(filename, "w", encoding="utf-8") as fh:
-                for server in configs:
-                    fh.write(f"{server}\n")
-                    progress.update(task, advance=1)
+    total = len(configs)
+    _print(f"\n[bold]Total servers: {total}[/bold]")
 
-        console.print(
-            f"\n[green]\u2713[/green] Saved [bold]{len(configs)}[/bold] "
-            f"servers to [bold cyan]{filename}[/bold cyan]"
-        )
-        console.print("[dim]You can resume or use these servers.[/dim]\n")
-    except OSError as exc:
-        console.print(
-            f"\n[red]\u2717[/red] Failed to save partial results: "
-            f"[bold]{exc}[/bold]\n"
-        )
-
-
-def fetch_servers(
-    finder: V2RayServerFinder,
-    use_search: bool = False,
-    check_health: bool = False,
-    verbose: bool = True,
-) -> List:
-    """
-    Fetch servers with Rich progress display.
-
-    Updates the partial-results buffer after *each* fetch step so that a
-    Ctrl+C at any point still yields whatever was collected before.
-    """
-    partial: List = []
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task("[cyan]Initializing...", total=None)
-
-        try:
-            if check_health:
-                progress.update(
-                    task, description="Fetching and health-checking servers..."
-                )
-                servers = finder.get_servers_with_health(
-                    use_github_search=use_search,
-                    check_health=True,
-                    health_timeout=5.0,
-                    min_quality_score=0,
-                    filter_unhealthy=False,
-                )
-                partial = servers
-            else:
-                # Step 1: known curated sources
-                progress.update(task, description="Fetching known sources...")
-                servers = finder.get_servers_from_known_sources()
-                partial = list(servers)  # snapshot after step 1
-
-                # Step 2: optional GitHub search
-                if use_search and not finder.should_stop():
-                    progress.update(
-                        task, description="Searching GitHub repositories..."
-                    )
-                    github_servers = finder.get_servers_from_github()
-                    servers.extend(github_servers)
-                    servers = list(dict.fromkeys(servers))
-                    partial = list(servers)  # snapshot after step 2
-
-            progress.update(task, description="Done!")
-            progress.remove_task(task)
-
-        except KeyboardInterrupt:
-            progress.remove_task(task)
-            # partial already holds whatever was fetched up to this point
-            if partial:
-                console.print(
-                    f"\n[yellow]![/yellow] Interrupted \u2014 found "
-                    f"[bold]{len(partial)}[/bold] servers so far"
-                )
-            return partial
-
-        except Exception as exc:
-            progress.remove_task(task)
-            console.print(f"\n[red]\u2717[/red] Error: [bold]{exc}[/bold]")
-            return partial
-
-    # Stopped via 'q' (not Ctrl+C): partial is the last complete snapshot
-    if finder.should_stop():
-        return partial
-
-    if verbose:
-        console.print(
-            f"\n[green]\u2713[/green] Found [bold]{len(servers)}[/bold] unique servers"
-        )
-        if check_health and servers and isinstance(servers[0], dict):
-            console.print("\n[bold]Top 3 by quality:[/bold]")
-            for i, server in enumerate(servers[:3], 1):
-                protocol = server.get("protocol", "?")
-                quality = server.get("quality_score", 0)
-                latency = server.get("latency_ms", 0)
-                status = server.get("health_status", "unknown")
-                status_color = {
-                    "healthy": "green",
-                    "degraded": "yellow",
-                    "unreachable": "red",
-                }.get(status, "dim")
-                console.print(
-                    f"  [dim]{i}.[/dim] [{protocol}] "
-                    f"Quality: [bold]{quality:.1f}[/bold] | "
-                    f"Latency: {latency:.1f}ms | "
-                    f"Status: [{status_color}]{status}[/{status_color}]"
-                )
-        else:
-            console.print("\n[bold]Preview:[/bold]")
-            for i, server in enumerate(servers[:3], 1):
-                protocol = server.split("://")[0] if "://" in server else "?"
-                preview = server[:80] + "..." if len(server) > 80 else server
-                console.print(f"  [dim]{i}.[/dim] [{protocol}] {preview}")
-
-    return servers
-
-
-def show_stats(servers: List, show_health: bool = False) -> None:
-    """Display detailed statistics using Rich tables."""
-    if not servers:
-        console.print("[yellow]! No servers to analyze[/yellow]")
+    if not RICH_AVAILABLE:
+        for proto, count in sorted(protocols.items(), key=lambda x: x[1], reverse=True):
+            print(f"  {proto}: {count} ({100 * count / total:.1f}%)")
         return
-
-    has_health = servers and isinstance(servers[0], dict)
-    protocols: dict = {}
-    for server in servers:
-        protocol = (
-            server.get("protocol", "unknown")
-            if has_health
-            else (server.split("://")[0] if "://" in server else "unknown")
-        )
-        protocols[protocol] = protocols.get(protocol, 0) + 1
 
     table = Table(
-        title=f"\U0001f4ca Statistics ({len(servers)} total servers)",
+        title=f"\U0001f4ca Statistics ({total} servers)",
         box=box.ROUNDED,
     )
-    table.add_column("Protocol", style="cyan", no_wrap=True)
-    table.add_column("Count", justify="right", style="green bold")
-    table.add_column("Percent", justify="right", style="magenta")
+    table.add_column("Protocol",  style="cyan",         no_wrap=True)
+    table.add_column("Count",     justify="right",      style="green bold")
+    table.add_column("Percent",   justify="right",      style="magenta")
 
-    total = len(servers)
-    for protocol, count in sorted(protocols.items(), key=lambda x: x[1], reverse=True):
-        table.add_row(protocol, str(count), f"{100 * count / total:.1f}%")
+    for proto, count in sorted(protocols.items(), key=lambda x: x[1], reverse=True):
+        table.add_row(proto, str(count), f"{100 * count / total:.1f}%")
     console.print(table)
 
-    if has_health:
-        health_table = Table(title="\U0001f48a Health Status", box=box.ROUNDED)
-        health_table.add_column("Status", style="cyan")
-        health_table.add_column("Count", justify="right", style="green bold")
-        health_table.add_column("Percent", justify="right", style="magenta")
+    # Pipeline stats
+    if result and result.stats:
+        st = result.stats
+        stat_rows = [
+            ("fetched",            "Raw configs fetched"),
+            ("deduped",            "After dedup"),
+            ("healthy",            "Passed health check"),
+            ("scored",             "Scored"),
+            ("dropped_per_source", "Dropped (per-source cap)"),
+            ("dropped_global",     "Dropped (global cap)"),
+            ("cache_hits",         "Cache hits"),
+            ("cache_misses",       "Cache misses"),
+        ]
+        rows = [(label, st[key]) for key, label in stat_rows if st.get(key)]
+        if rows:
+            st_table = Table(title="Pipeline Stats", box=box.SIMPLE)
+            st_table.add_column("Metric",  style="cyan")
+            st_table.add_column("Value",   justify="right", style="bold")
+            for label, val in rows:
+                st_table.add_row(label, str(val))
+            console.print(st_table)
 
-        healthy = sum(1 for s in servers if s.get("health_status") == "healthy")
-        degraded = sum(1 for s in servers if s.get("health_status") == "degraded")
-        unreachable = sum(1 for s in servers if s.get("health_status") == "unreachable")
-        invalid = sum(1 for s in servers if s.get("health_status") == "invalid")
-
-        health_table.add_row(
-            "[green]Healthy[/green]", str(healthy), f"{100 * healthy / total:.1f}%"
-        )
-        health_table.add_row(
-            "[yellow]Degraded[/yellow]",
-            str(degraded),
-            f"{100 * degraded / total:.1f}%",
-        )
-        health_table.add_row(
-            "[red]Unreachable[/red]",
-            str(unreachable),
-            f"{100 * unreachable / total:.1f}%",
-        )
-        health_table.add_row(
-            "[dim]Invalid[/dim]", str(invalid), f"{100 * invalid / total:.1f}%"
-        )
-        console.print(health_table)
-
-        if healthy > 0:
-            avg_quality = (
-                sum(
-                    s.get("quality_score", 0)
-                    for s in servers
-                    if s.get("health_status") == "healthy"
-                )
-                / healthy
+    # Score summary
+    if result and result.scores:
+        score_table = Table(title="Top 5 Servers", box=box.SIMPLE)
+        score_table.add_column("#",         style="dim",    width=3)
+        score_table.add_column("Protocol",  style="cyan")
+        score_table.add_column("Score",     justify="right", style="green bold")
+        score_table.add_column("Grade",     justify="center")
+        score_table.add_column("Config",    style="dim",    no_wrap=True)
+        for i, score in enumerate(result.scores[:5], 1):
+            grade_color = {"S": "green bold", "A": "green", "B": "yellow",
+                           "C": "yellow", "D": "red", "F": "red dim"}.get(
+                               getattr(score, "grade", "F"), "dim")
+            score_table.add_row(
+                str(i),
+                score.protocol,
+                f"{score.total:.1f}",
+                f"[{grade_color}]{getattr(score, 'grade', '?')}[/{grade_color}]",
+                score.config[:60] + "\u2026" if len(score.config) > 60 else score.config,
             )
-            avg_latency = (
-                sum(
-                    s.get("latency_ms", 0)
-                    for s in servers
-                    if s.get("health_status") == "healthy"
-                )
-                / healthy
-            )
-            console.print(
-                f"\n[bold]Average quality (healthy):[/bold] {avg_quality:.1f}/100"
-            )
-            console.print(
-                f"[bold]Average latency (healthy):[/bold] {avg_latency:.1f}ms"
-            )
+        console.print(score_table)
 
 
-def save_servers(servers: List) -> None:
-    """Interactively ask for filename/limit then save."""
-    if not servers:
-        console.print("[yellow]! No servers loaded[/yellow]")
+def save_results(configs: List[str], filename: str, partial: bool = False) -> None:
+    """Save config strings to *filename* with a Rich progress bar."""
+    if not configs:
+        _print("[yellow]! No servers to save[/yellow]")
         return
 
-    filename = Prompt.ask("\U0001f4c1 Filename", default="v2ray_servers.txt")
-    limit = IntPrompt.ask("\U0001f522 Limit (0 = all)", default=0)
-    servers_to_save = servers[:limit] if limit > 0 else servers
-    output_servers: List[str] = (
-        [s["config"] for s in servers_to_save]
-        if servers_to_save and isinstance(servers_to_save[0], dict)
-        else list(servers_to_save)
-    )
+    label = "partial results" if partial else "results"
+    if not RICH_AVAILABLE:
+        with open(filename, "w", encoding="utf-8") as fh:
+            for c in configs:
+                fh.write(f"{c}\n")
+        print(f"Saved {len(configs)} {label} to {filename}")
+        return
 
     with Progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
+        MofNCompleteColumn(),
         console=console,
-    ) as progress:
-        task = progress.add_task("Saving servers...", total=len(output_servers))
-        try:
-            with open(filename, "w", encoding="utf-8") as fh:
-                for server in output_servers:
-                    fh.write(f"{server}\n")
-                    progress.update(task, advance=1)
-            console.print(
-                f"\n[green]\u2713[/green] Saved [bold]{len(output_servers)}[/bold]"
-                f" servers to [bold cyan]{filename}[/bold cyan]"
-            )
-        except OSError as exc:
-            console.print(f"\n[red]\u2717[/red] Save failed: [bold]{exc}[/bold]")
+    ) as bar:
+        task = bar.add_task(f"[cyan]Saving {label}…[/cyan]", total=len(configs))
+        with open(filename, "w", encoding="utf-8") as fh:
+            for cfg in configs:
+                fh.write(f"{cfg}\n")
+                bar.advance(task)
 
-
-def interactive_mode(finder: V2RayServerFinder) -> None:
-    """
-    Rich interactive TUI.
-
-    Uses ``except KeyboardInterrupt`` per operation (same rationale as the
-    plain CLI: avoids competing ``input()`` calls between the listener
-    thread and the Rich prompt).
-    """
-    print_welcome()
-    console.print(
-        "[dim]\U0001f4a1 Tip: Press Ctrl+C during any operation to save partial results[/dim]\n"
+    _print(
+        f"[green]\u2713[/green] Saved [bold]{len(configs)}[/bold] "
+        f"{label} to [bold cyan]{filename}[/bold cyan]"
     )
 
-    cached_servers: List = []
+
+# ---------------------------------------------------------------------------
+# Core run helper
+# ---------------------------------------------------------------------------
+
+def _run_pipeline(
+    pipeline: Pipeline,
+    stop_ctrl: StopController,
+    output: Optional[str],
+    limit: int,
+    stats_only: bool,
+) -> int:
+    """Execute pipeline with Rich progress bars.  Return exit code."""
+    result: Optional[PipelineResult] = None
+
+    with PipelineProgress() as prog:
+        try:
+            result = pipeline.run(
+                stop_event=stop_ctrl.event,
+                progress_callback=prog,
+            )
+        except KeyboardInterrupt:
+            stop_ctrl.stop()
+
+    if result is None:
+        result = PipelineResult()
+
+    configs = _configs_from_result(result, limit=limit)
+
+    if stop_ctrl.is_set():
+        _print("\n[yellow]\u26a0[/yellow] [bold]Stopped by user — partial results[/bold]")
+        if configs and output:
+            save_results(configs, output, partial=True)
+        if configs:
+            show_stats(configs, result=result)
+        return 130
+
+    if not configs:
+        _print("[yellow]! No servers found[/yellow]")
+        return 1
+
+    show_stats(configs, result=result)
+
+    if output:
+        save_results(configs, output)
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Interactive TUI
+# ---------------------------------------------------------------------------
+
+def interactive_mode(
+    github_token: Optional[str] = None,
+    cache_enabled: bool = False,
+    cache_ttl: int = 3600,
+) -> None:
+    """Rich interactive TUI backed by Pipeline."""
+    if not RICH_AVAILABLE:
+        _print("[red]Rich is not installed. Run: pip install rich[/red]")
+        sys.exit(1)
+
+    print_welcome()
+    console.print(
+        "[dim]\U0001f4a1 Ctrl+C at any time to stop and show partial results[/dim]\n"
+    )
+
+    cached_result: Optional[PipelineResult] = None
 
     while True:
         console.print("\n[bold cyan]Options:[/bold cyan]")
-        console.print("[cyan]1.[/] Quick fetch (known sources only)")
-        console.print("[cyan]2.[/] Full fetch (sources + GitHub search)")
-        console.print("[cyan]3.[/] Fetch with health checking")
-        console.print("[cyan]4.[/] Show statistics")
-        console.print("[cyan]5.[/] Save to file")
-        console.print("[cyan]6.[/] Exit")
+        console.print("[cyan]1.[/] Quick fetch (no health check)")
+        console.print("[cyan]2.[/] Fetch + health check (TCP)")
+        console.print("[cyan]3.[/] Show statistics")
+        console.print("[cyan]4.[/] Save to file")
+        console.print("[cyan]5.[/] Exit")
 
         try:
-            choice = Prompt.ask(
-                "\nSelect option", choices=["1", "2", "3", "4", "5", "6"]
-            )
+            choice = Prompt.ask("\nSelect option", choices=["1", "2", "3", "4", "5"])
         except KeyboardInterrupt:
             console.print("\n\n[bold cyan]\U0001f44b Goodbye![/bold cyan]")
             break
 
-        if choice == "6":
+        if choice == "5":
             console.print("\n[bold cyan]\U0001f44b Goodbye![/bold cyan]")
             break
 
-        elif choice in ("1", "2", "3"):
-            use_search = choice == "2"
-            check_health = choice == "3"
-            if check_health:
+        elif choice in ("1", "2"):
+            check_health = choice == "2"
+            global _stop_ctrl
+            stop = StopController()
+            _stop_ctrl = stop
+
+            pipeline = Pipeline(
+                check_health=check_health,
+                github_token=github_token,
+                cache_enabled=cache_enabled,
+                cache_ttl=cache_ttl,
+            )
+
+            result: Optional[PipelineResult] = None
+            with PipelineProgress() as prog:
                 try:
-                    use_search = Confirm.ask("Include GitHub search?", default=False)
+                    result = pipeline.run(
+                        stop_event=stop.event,
+                        progress_callback=prog,
+                    )
                 except KeyboardInterrupt:
-                    continue
-                console.print(
-                    "\n[yellow]Note:[/yellow] Health checking may take 1\u20132 minutes"
-                )
+                    stop.stop()
 
-            finder.reset_stop()
-            try:
-                result = fetch_servers(
-                    finder, use_search=use_search, check_health=check_health
+            if result is not None:
+                cached_result = result
+                configs = _configs_from_result(result)
+                label = "partial" if stop.is_set() else "total"
+                _print(
+                    f"\n[green]\u2713[/green] Found [bold]{len(configs)}[/bold] {label} servers"
                 )
-            except KeyboardInterrupt:
-                finder.request_stop()
-                result = []
+                if stop.is_set() and configs:
+                    save_results(configs, "v2ray_servers_partial.txt", partial=True)
 
-            if result:
-                cached_servers = result
-
-            if finder.should_stop() and result:
-                console.print(
-                    f"\n[yellow]\u26a0[/yellow] Stopped early \u2014 "
-                    f"[bold]{len(result)}[/bold] partial results"
-                )
-                save_partial_results(result)
+        elif choice == "3":
+            if cached_result is None:
+                _print("[yellow]! No results yet. Run fetch first.[/yellow]")
+            else:
+                show_stats(_configs_from_result(cached_result), result=cached_result)
 
         elif choice == "4":
-            has_health = cached_servers and isinstance(cached_servers[0], dict)
-            show_stats(cached_servers, show_health=bool(has_health))
+            if cached_result is None:
+                _print("[yellow]! No results yet. Run fetch first.[/yellow]")
+            else:
+                filename = Prompt.ask("\U0001f4c1 Filename", default="v2ray_servers.txt")
+                lim      = IntPrompt.ask("\U0001f522 Limit (0 = all)", default=0)
+                save_results(_configs_from_result(cached_result, limit=lim), filename)
 
-        elif choice == "5":
-            save_servers(cached_servers)
 
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
 
 def main() -> None:
-    """Rich CLI entry point."""
-    global _active_finder
+    """Rich CLI entry point (V2-P1)."""
+    global _stop_ctrl
 
     parser = argparse.ArgumentParser(
-        description="v2ray-finder (Rich CLI)",
+        description="v2ray-finder (Rich CLI — Pipeline edition)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  v2ray-finder-rich                      # interactive rich TUI
+  v2ray-finder-rich                      # interactive TUI
   v2ray-finder-rich -o servers.txt       # quick fetch + save
-  v2ray-finder-rich -s -l 200            # GitHub search + limit
-  v2ray-finder-rich -c --min-quality 60  # health check + filter
-  v2ray-finder-rich --prompt-token       # prompt for GitHub token
+  v2ray-finder-rich -c -o servers.txt    # health check + save
+  v2ray-finder-rich --stats-only         # stats only
+  v2ray-finder-rich --cache              # enable source caching
+  v2ray-finder-rich --cache-ttl 1800     # 30-min cache TTL
         """,
     )
-    parser.add_argument("-o", "--output", help="output filename")
-    parser.add_argument("-l", "--limit", type=int, default=0, help="limit (0=all)")
-    parser.add_argument("-s", "--search", action="store_true", help="GitHub search")
-    parser.add_argument("-t", "--token", help="GitHub token (prefer env var)")
-    parser.add_argument(
-        "--prompt-token",
-        action="store_true",
-        help="Prompt for GitHub token interactively",
-    )
-    parser.add_argument("--stats-only", action="store_true", help="show stats only")
-    parser.add_argument(
-        "-i", "--interactive", action="store_true", help="force interactive mode"
-    )
-    parser.add_argument(
-        "-c", "--check-health", action="store_true", help="health check (TCP)"
-    )
-    parser.add_argument(
-        "--min-quality", type=float, default=0.0, help="min quality score (0-100)"
-    )
-    parser.add_argument(
-        "--health-timeout", type=float, default=5.0, help="health timeout (s)"
-    )
+    parser.add_argument("-o", "--output",       help="output filename")
+    parser.add_argument("-l", "--limit",        type=int, default=0,
+                        help="limit number of configs (0 = all)")
+    parser.add_argument("-t", "--token",        help="GitHub token (prefer GITHUB_TOKEN env)")
+    parser.add_argument("-c", "--check-health", action="store_true",
+                        help="enable TCP health checks")
+    parser.add_argument("--check-http",         action="store_true",
+                        help="enable HTTP probe (Layer 2)")
+    parser.add_argument("--check-google-204",   action="store_true",
+                        help="enable Google-204 xray probe (Layer 3)")
+    parser.add_argument("--min-quality",        type=float, default=0.0,
+                        help="minimum quality score (0–100)")
+    parser.add_argument("--timeout",            type=float, default=5.0,
+                        help="per-server health-check timeout (s)")
+    parser.add_argument("--fetch-timeout",      type=int, default=15,
+                        help="source fetch HTTP timeout (s)")
+    parser.add_argument("--stats-only",         action="store_true",
+                        help="print stats then exit (no file written)")
+    parser.add_argument("-i", "--interactive",  action="store_true",
+                        help="force interactive TUI")
+    parser.add_argument("--cache",              action="store_true",
+                        help="enable TTL source caching")
+    parser.add_argument("--cache-backend",      default="memory",
+                        choices=["memory", "disk"],
+                        help="cache backend (default: memory)")
+    parser.add_argument("--cache-ttl",          type=int, default=3600,
+                        help="cache TTL in seconds (default: 3600)")
+    parser.add_argument("--cache-dir",          default=None,
+                        help="disk cache directory")
     args = parser.parse_args()
 
-    # --- Token resolution ---
-    token: Optional[str] = None
+    # Token resolution
+    token: Optional[str] = args.token or os.environ.get("GITHUB_TOKEN")
     if args.token:
-        token = args.token
-        console.print(
-            "[red]WARNING:[/red] Passing tokens via command line is insecure!",
-            file=sys.stderr,
-        )
-    elif args.prompt_token:
-        token = prompt_for_token()
+        _print("[red]WARNING:[/red] Passing tokens via CLI is insecure!")
 
-    token_from_env = os.environ.get("GITHUB_TOKEN")
-    if not token and token_from_env:
-        token = token_from_env
-        console.print("[blue]i[/blue] Using token from GITHUB_TOKEN env variable")
-    elif (
-        not token
-        and not args.prompt_token
-        and (args.interactive or (not args.output and not args.stats_only))
-    ):
-        token = prompt_for_token()
-
-    finder = V2RayServerFinder(token=token)
-    _active_finder = finder
-
-    # Register SIGINT handler AFTER finder is created so _active_finder is set.
+    # Register SIGINT handler
     signal.signal(signal.SIGINT, _signal_handler)
 
-    # --- Interactive mode ---
+    # Interactive mode
     if args.interactive or (not args.output and not args.stats_only):
-        interactive_mode(finder)
+        interactive_mode(
+            github_token=token,
+            cache_enabled=args.cache,
+            cache_ttl=args.cache_ttl,
+        )
         return
 
-    # --- Non-interactive mode ---
+    # Non-interactive mode
     print_welcome()
 
-    ctrl = StopController(finder)
-    ctrl.start()
-    partial_servers: List = []
-    servers: List = []
+    stop = StopController()
+    _stop_ctrl = stop
 
-    try:
-        if args.check_health:
-            servers = finder.get_servers_with_health(
-                use_github_search=args.search,
-                check_health=True,
-                health_timeout=args.health_timeout,
-                min_quality_score=args.min_quality,
-                filter_unhealthy=True,
-            )
-        else:
-            servers = fetch_servers(finder, use_search=args.search, verbose=True)
-        partial_servers = servers
+    pipeline = Pipeline(
+        check_health=args.check_health,
+        check_http_probe=args.check_http,
+        check_google_204=args.check_google_204,
+        min_quality_score=args.min_quality,
+        timeout=args.timeout,
+        fetch_timeout=args.fetch_timeout,
+        limit=args.limit or None,
+        github_token=token,
+        cache_enabled=args.cache,
+        cache_backend=args.cache_backend,
+        cache_ttl=args.cache_ttl,
+        cache_dir=args.cache_dir,
+    )
 
-    except KeyboardInterrupt:
-        finder.request_stop()
-        servers = partial_servers
-
-    except Exception as exc:
-        ctrl.stop()
-        console.print(f"\n[red]\u2717[/red] Unexpected error: [bold]{exc}[/bold]")
-        if partial_servers:
-            save_partial_results(partial_servers)
-        sys.exit(1)
-
-    finally:
-        ctrl.stop()
-
-    # --- Stopped early ---
-    if finder.should_stop():
-        console.print(
-            "\n[yellow]\u26a0[/yellow] [bold]Operation stopped by user[/bold]"
-        )
-        if partial_servers:
-            out_file = args.output if args.output else "v2ray_servers_partial.txt"
-            save_partial_results(partial_servers, out_file)
-            show_stats(partial_servers, show_health=args.check_health)
-        sys.exit(130)
-
-    # --- Normal completion ---
-    if not servers:
-        sys.exit(1)
-
-    if args.limit > 0:
-        servers = servers[: args.limit]
-
-    if args.stats_only or not args.output:
-        show_stats(servers, show_health=args.check_health)
-
-    if args.output:
-        output_servers: List[str] = (
-            [s["config"] for s in servers]
-            if servers and isinstance(servers[0], dict)
-            else list(servers)
-        )
-        try:
-            with open(args.output, "w", encoding="utf-8") as fh:
-                for server in output_servers:
-                    fh.write(f"{server}\n")
-            console.print(
-                f"\n[green]\u2713[/green] Saved [bold]{len(output_servers)}[/bold]"
-                f" servers to [bold cyan]{args.output}[/bold cyan]"
-            )
-        except OSError as exc:
-            console.print(f"\n[red]\u2717[/red] Failed to save: [bold]{exc}[/bold]")
-            sys.exit(1)
+    code = _run_pipeline(
+        pipeline=pipeline,
+        stop_ctrl=stop,
+        output=args.output,
+        limit=args.limit,
+        stats_only=args.stats_only,
+    )
+    sys.exit(code)
 
 
 if __name__ == "__main__":

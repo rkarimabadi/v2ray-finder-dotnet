@@ -1,388 +1,336 @@
-"""Tests for the Rich CLI module."""
+"""Tests for cli_rich — PipelineProgress, show_stats, save_results, _run_pipeline (V2-P1)."""
+from __future__ import annotations
 
+import os
 import sys
-from unittest.mock import MagicMock, Mock, patch
+import tempfile
+import threading
+import unittest
+from io import StringIO
+from unittest.mock import MagicMock, patch
 
-import pytest
-
-from v2ray_finder.cli_rich import (
-    fetch_servers,
-    interactive_mode,
-    main,
-    print_welcome,
-    save_servers,
-    show_stats,
-)
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+from v2ray_finder.pipeline import PipelineResult, StopController
+from v2ray_finder.scorer import ServerScore
 
 
-@pytest.fixture(autouse=True)
-def mock_console(monkeypatch):
-    """Replace the module-level Console so no Rich output is produced."""
-    mc = MagicMock()
-    monkeypatch.setattr("v2ray_finder.cli_rich.console", mc)
-    return mc
+VMESS  = "vmess://eyJhZGQiOiIxMjcuMC4wLjEiLCJwb3J0Ijo0NDMsImlkIjoiYWJjMTIzIn0="
+VLESS  = "vless://uuid@1.2.3.4:443?security=tls"
+TROJAN = "trojan://password@5.6.7.8:443?security=tls"
+SAMPLE = [VMESS, VLESS, TROJAN]
 
 
-@pytest.fixture()
-def mock_progress():
-    """Patch Progress so tests don't need a live terminal."""
-    prog = MagicMock()
-    prog.add_task.return_value = 0
-    with patch("v2ray_finder.cli_rich.Progress") as mock_cls:
-        mock_cls.return_value.__enter__ = Mock(return_value=prog)
-        mock_cls.return_value.__exit__ = Mock(return_value=False)
-        yield prog
+def _make_result(configs=None, scores=None, stats=None):
+    return PipelineResult(
+        configs=configs or SAMPLE[:],
+        scores=scores or [],
+        stats=stats or {"fetched": 3, "deduped": 3, "healthy": 0, "scored": 0,
+                        "dropped_per_source": 0, "dropped_global": 0,
+                        "cache_hits": 0, "cache_misses": 0},
+    )
 
 
-@pytest.fixture()
-def finder():
-    """A pre-configured mock finder."""
-    f = Mock()
-    f.get_servers_from_known_sources.return_value = [
-        "vmess://cfg1",
-        "vless://cfg2",
-    ]
-    f.get_servers_from_github.return_value = ["trojan://cfg3"]
-    f.should_stop.return_value = False
-    return f
+def _run_main(*argv):
+    """Run cli_rich.main() and capture stdout; returns (stdout, exit_code)."""
+    import v2ray_finder.cli_rich as _cr
+    buf = StringIO()
+    code = 0
+    with patch("sys.argv", ["v2ray-finder-rich"] + list(argv)), \
+         patch("sys.stdout", buf), patch("sys.stderr", StringIO()):
+        try:
+            _cr.main()
+        except SystemExit as exc:
+            code = exc.code if isinstance(exc.code, int) else 0
+    return buf.getvalue(), code
 
 
 # ---------------------------------------------------------------------------
-# print_welcome
+# PipelineProgress
 # ---------------------------------------------------------------------------
 
+class TestPipelineProgress(unittest.TestCase):
 
-def test_print_welcome_calls_console(mock_console):
-    """print_welcome() prints something to the console."""
-    print_welcome()
-    assert mock_console.print.called
+    def _prog(self):
+        """Return a PipelineProgress with Rich mocked out."""
+        from v2ray_finder import cli_rich as cr
+        # Patch Progress so no real terminal I/O happens
+        with patch("v2ray_finder.cli_rich.RICH_AVAILABLE", False):
+            prog = cr.PipelineProgress()
+        return prog
+
+    def test_callable(self):
+        from v2ray_finder.cli_rich import PipelineProgress
+        with patch("v2ray_finder.cli_rich.RICH_AVAILABLE", False):
+            prog = PipelineProgress()
+        self.assertTrue(callable(prog))
+
+    def test_context_manager_no_exception(self):
+        from v2ray_finder.cli_rich import PipelineProgress
+        with patch("v2ray_finder.cli_rich.RICH_AVAILABLE", False):
+            prog = PipelineProgress()
+        with prog:
+            prog("fetch", 1, 10, "test")
+
+    def test_stages_accepted(self):
+        from v2ray_finder.cli_rich import PipelineProgress
+        with patch("v2ray_finder.cli_rich.RICH_AVAILABLE", False):
+            prog = PipelineProgress()
+        # Must not raise for any valid stage
+        for stage in ("fetch", "health", "score"):
+            prog(stage, 0, 10, "msg")
+
+    def test_zero_total_no_exception(self):
+        from v2ray_finder.cli_rich import PipelineProgress
+        with patch("v2ray_finder.cli_rich.RICH_AVAILABLE", False):
+            prog = PipelineProgress()
+        prog("fetch", 0, 0, "empty")
 
 
 # ---------------------------------------------------------------------------
 # show_stats
 # ---------------------------------------------------------------------------
 
+class TestShowStats(unittest.TestCase):
 
-def test_show_stats_empty_prints_warning(mock_console):
-    """show_stats([]) prints the 'no servers' warning."""
-    show_stats([])
-    mock_console.print.assert_called_once()
+    def _capture(self, *args, **kwargs):
+        from v2ray_finder import cli_rich as cr
+        buf = StringIO()
+        with patch("v2ray_finder.cli_rich.RICH_AVAILABLE", False), \
+             patch("sys.stdout", buf):
+            cr.show_stats(*args, **kwargs)
+        return buf.getvalue()
 
+    def test_empty_list(self):
+        out = self._capture([])
+        self.assertIn("No servers", out)
 
-def test_show_stats_with_servers(mock_console):
-    """show_stats prints a table for non-empty server list."""
-    show_stats(["vmess://a", "vmess://b", "vless://c"])
-    assert mock_console.print.called
+    def test_total_servers_shown(self):
+        out = self._capture(SAMPLE[:])
+        self.assertIn("Total servers: 3", out)
 
+    def test_protocols_shown(self):
+        out = self._capture(SAMPLE[:])
+        for proto in ("vmess", "vless", "trojan"):
+            self.assertIn(proto, out)
 
-def test_show_stats_with_health_data(mock_console):
-    """show_stats prints health table when server dicts are passed."""
-    servers = [
-        {
-            "config": "vmess://s1",
-            "protocol": "vmess",
-            "health_status": "healthy",
-            "quality_score": 90.0,
-            "latency_ms": 50.0,
-        },
-        {
-            "config": "vless://s2",
-            "protocol": "vless",
-            "health_status": "unreachable",
-            "quality_score": 10.0,
-            "latency_ms": 0.0,
-        },
-    ]
-    show_stats(servers, show_health=True)
-    assert mock_console.print.call_count >= 2
-
-
-# ---------------------------------------------------------------------------
-# save_servers
-# ---------------------------------------------------------------------------
-
-
-def test_save_servers_empty_prints_warning(mock_console):
-    """save_servers([]) prints the 'no servers' warning without prompting."""
-    save_servers([])
-    mock_console.print.assert_called_once()
-
-
-def test_save_servers_saves_to_file(mock_console, mock_progress, tmp_path):
-    """save_servers() writes each server to the chosen file."""
-    out_file = str(tmp_path / "servers.txt")
-    with patch("v2ray_finder.cli_rich.Prompt") as mock_prompt:
-        with patch("v2ray_finder.cli_rich.IntPrompt") as mock_int:
-            mock_prompt.ask.return_value = out_file
-            mock_int.ask.return_value = 0
-            save_servers(["vmess://s1", "vless://s2"])
-    content = open(out_file).read()
-    assert "vmess://s1" in content
-    assert "vless://s2" in content
-
-
-def test_save_servers_with_limit(mock_console, mock_progress, tmp_path):
-    """save_servers() respects a non-zero limit."""
-    out_file = str(tmp_path / "limited.txt")
-    with patch("v2ray_finder.cli_rich.Prompt") as mock_prompt:
-        with patch("v2ray_finder.cli_rich.IntPrompt") as mock_int:
-            mock_prompt.ask.return_value = out_file
-            mock_int.ask.return_value = 1  # save only 1
-            save_servers(["vmess://s1", "vless://s2", "trojan://s3"])
-    lines = [ln for ln in open(out_file).read().splitlines() if ln]
-    assert len(lines) == 1
-
-
-def test_save_servers_with_health_dicts(mock_console, mock_progress, tmp_path):
-    """save_servers() extracts 'config' key when dicts are passed."""
-    out_file = str(tmp_path / "health.txt")
-    servers = [
-        {
-            "config": "vmess://s1",
-            "protocol": "vmess",
-            "health_status": "healthy",
-            "quality_score": 90.0,
-            "latency_ms": 50.0,
-        },
-        {
-            "config": "vless://s2",
-            "protocol": "vless",
-            "health_status": "healthy",
-            "quality_score": 85.0,
-            "latency_ms": 60.0,
-        },
-    ]
-    with patch("v2ray_finder.cli_rich.Prompt") as mock_prompt:
-        with patch("v2ray_finder.cli_rich.IntPrompt") as mock_int:
-            mock_prompt.ask.return_value = out_file
-            mock_int.ask.return_value = 0
-            save_servers(servers)
-    lines = [ln for ln in open(out_file).read().splitlines() if ln]
-    assert lines == ["vmess://s1", "vless://s2"]
+    def test_result_with_pipeline_stats(self):
+        result = _make_result(stats={"fetched": 10, "deduped": 7,
+                                     "healthy": 0, "scored": 0,
+                                     "dropped_per_source": 0, "dropped_global": 0,
+                                     "cache_hits": 2, "cache_misses": 8})
+        # With Rich disabled the rich table path is skipped;
+        # just verify no exception is raised
+        with patch("v2ray_finder.cli_rich.RICH_AVAILABLE", False):
+            from v2ray_finder import cli_rich as cr
+            buf = StringIO()
+            with patch("sys.stdout", buf):
+                cr.show_stats(SAMPLE[:], result=result)
 
 
 # ---------------------------------------------------------------------------
-# fetch_servers
+# save_results
 # ---------------------------------------------------------------------------
 
+class TestSaveResults(unittest.TestCase):
 
-def test_fetch_servers_returns_known_sources(mock_console, mock_progress, finder):
-    """fetch_servers() returns servers from known sources by default."""
-    result = fetch_servers(finder, use_search=False)
-    assert result == ["vmess://cfg1", "vless://cfg2"]
+    def test_writes_configs_to_file(self):
+        from v2ray_finder.cli_rich import save_results
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
+            fname = f.name
+        try:
+            with patch("v2ray_finder.cli_rich.RICH_AVAILABLE", False):
+                save_results(SAMPLE[:], fname)
+            with open(fname) as f:
+                lines = [l.strip() for l in f if l.strip()]
+            self.assertEqual(lines, SAMPLE)
+        finally:
+            os.unlink(fname)
 
+    def test_empty_list_prints_message(self):
+        from v2ray_finder import cli_rich as cr
+        buf = StringIO()
+        with patch("v2ray_finder.cli_rich.RICH_AVAILABLE", False), \
+             patch("sys.stdout", buf):
+            cr.save_results([], "ignored.txt")
+        self.assertIn("No servers", buf.getvalue())
 
-def test_fetch_servers_with_github_search(mock_console, mock_progress, finder):
-    """fetch_servers(use_search=True) merges and deduplicates results."""
-    result = fetch_servers(finder, use_search=True)
-    assert len(result) == 3
-    assert "trojan://cfg3" in result
-
-
-def test_fetch_servers_silent(mock_console, mock_progress, finder):
-    """fetch_servers(verbose=False) returns servers without extra output."""
-    result = fetch_servers(finder, verbose=False)
-    assert len(result) == 2
-
-
-def test_fetch_servers_with_health_check(mock_console, mock_progress):
-    """fetch_servers(check_health=True) calls get_servers_with_health."""
-    health_servers = [
-        {
-            "config": "vmess://s1",
-            "protocol": "vmess",
-            "health_status": "healthy",
-            "quality_score": 90.0,
-            "latency_ms": 50.0,
-        },
-    ]
-    f = Mock()
-    f.get_servers_with_health.return_value = health_servers
-    f.should_stop.return_value = False
-    result = fetch_servers(f, check_health=True)
-    assert result == health_servers
-    f.get_servers_with_health.assert_called_once()
-
-
-def test_fetch_servers_exception_returns_empty(mock_console, mock_progress):
-    """fetch_servers() returns [] if finder raises an exception."""
-    bad_finder = Mock()
-    bad_finder.get_servers_from_known_sources.side_effect = Exception("boom")
-    result = fetch_servers(bad_finder)
-    assert result == []
+    def test_partial_flag_in_message(self):
+        from v2ray_finder.cli_rich import save_results
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
+            fname = f.name
+        try:
+            buf = StringIO()
+            with patch("v2ray_finder.cli_rich.RICH_AVAILABLE", False), \
+                 patch("sys.stdout", buf):
+                save_results([VMESS], fname, partial=True)
+            self.assertIn("partial", buf.getvalue())
+        finally:
+            os.unlink(fname)
 
 
 # ---------------------------------------------------------------------------
-# interactive_mode  -- menu: 1 quick, 2 full, 3 health, 4 stats, 5 save, 6 exit
+# _configs_from_result
 # ---------------------------------------------------------------------------
 
+class TestConfigsFromResult(unittest.TestCase):
 
-def test_interactive_mode_exits_on_6(mock_console, finder):
-    """Choice '6' exits the interactive loop."""
-    with patch("v2ray_finder.cli_rich.Prompt") as mock_prompt:
-        mock_prompt.ask.return_value = "6"
-        interactive_mode(finder)  # should not hang
+    def test_prefers_top_configs_when_scores_present(self):
+        from v2ray_finder.cli_rich import _configs_from_result
+        scores = [ServerScore(config=VMESS, protocol="vmess", latency_score=0.9)]
+        r = _make_result(configs=[TROJAN], scores=scores)
+        out = _configs_from_result(r)
+        self.assertIn(VMESS, out)
+        self.assertNotIn(TROJAN, out)
 
+    def test_falls_back_to_configs_when_no_scores(self):
+        from v2ray_finder.cli_rich import _configs_from_result
+        r = _make_result(configs=SAMPLE[:], scores=[])
+        out = _configs_from_result(r)
+        self.assertEqual(out, SAMPLE)
 
-def test_interactive_mode_quick_fetch(mock_console, mock_progress, finder):
-    """Choice '1' runs fetch_servers without GitHub search."""
-    with patch("v2ray_finder.cli_rich.Prompt") as mock_prompt:
-        mock_prompt.ask.side_effect = ["1", "6"]
-        interactive_mode(finder)
-    finder.get_servers_from_known_sources.assert_called()
+    def test_limit_applied(self):
+        from v2ray_finder.cli_rich import _configs_from_result
+        r = _make_result(configs=SAMPLE[:])
+        out = _configs_from_result(r, limit=1)
+        self.assertEqual(len(out), 1)
 
-
-def test_interactive_mode_full_fetch(mock_console, mock_progress, finder):
-    """Choice '2' runs fetch_servers with GitHub search enabled."""
-    with patch("v2ray_finder.cli_rich.Prompt") as mock_prompt:
-        mock_prompt.ask.side_effect = ["2", "6"]
-        interactive_mode(finder)
-    finder.get_servers_from_github.assert_called()
-
-
-def test_interactive_mode_health_check(mock_console, mock_progress):
-    """Choice '3' calls get_servers_with_health."""
-    health_finder = Mock()
-    health_finder.get_servers_with_health.return_value = []
-    health_finder.should_stop.return_value = False
-    with patch("v2ray_finder.cli_rich.Prompt") as mock_prompt:
-        with patch("v2ray_finder.cli_rich.Confirm") as mock_confirm:
-            mock_prompt.ask.side_effect = ["3", "6"]
-            mock_confirm.ask.return_value = False
-            interactive_mode(health_finder)
-    health_finder.get_servers_with_health.assert_called_once()
-
-
-def test_interactive_mode_show_stats(mock_console, finder):
-    """Choice '4' calls show_stats with cached_servers (empty when no fetch done)."""
-    with patch("v2ray_finder.cli_rich.Prompt") as mock_prompt:
-        with patch("v2ray_finder.cli_rich.show_stats") as mock_stats:
-            mock_prompt.ask.side_effect = ["4", "6"]
-            interactive_mode(finder)
-    # No fetch was done before selecting '4', so cached_servers is []
-    mock_stats.assert_called_once_with([], show_health=False)
-
-
-def test_interactive_mode_save(mock_console, finder):
-    """Choice '5' calls save_servers with cached_servers (empty when no fetch done)."""
-    with patch("v2ray_finder.cli_rich.Prompt") as mock_prompt:
-        with patch("v2ray_finder.cli_rich.save_servers") as mock_save:
-            mock_prompt.ask.side_effect = ["5", "6"]
-            interactive_mode(finder)
-    # No fetch was done before selecting '5', so cached_servers is []
-    mock_save.assert_called_once_with([])
+    def test_limit_zero_means_all(self):
+        from v2ray_finder.cli_rich import _configs_from_result
+        r = _make_result(configs=SAMPLE[:])
+        out = _configs_from_result(r, limit=0)
+        self.assertEqual(len(out), len(SAMPLE))
 
 
 # ---------------------------------------------------------------------------
-# main()
+# _run_pipeline
 # ---------------------------------------------------------------------------
 
+class TestRunPipeline(unittest.TestCase):
 
-def test_main_no_args_enters_interactive(mock_console):
-    """main() without flags goes into interactive_mode."""
-    with patch("sys.argv", ["v2ray-finder-rich"]):
-        mock_finder = Mock()
-        with patch("v2ray_finder.cli_rich.V2RayServerFinder", return_value=mock_finder):
-            with patch("v2ray_finder.cli_rich.interactive_mode") as mock_ia:
-                with patch("v2ray_finder.cli_rich.StopController"):
-                    with patch("v2ray_finder.cli_rich.Prompt"):
-                        with patch("v2ray_finder.cli_rich.Confirm") as mock_confirm:
-                            # Return False so prompt_for_token() skips getpass()
-                            mock_confirm.ask.return_value = False
-                            main()
-        mock_ia.assert_called_once_with(mock_finder)
+    def _patch(self, result=None):
+        from v2ray_finder import pipeline as _pl
+        return patch.object(_pl.Pipeline, "run", return_value=result or _make_result())
 
+    def test_returns_0_on_success(self):
+        from v2ray_finder.cli_rich import _run_pipeline
+        stop = StopController()
+        with self._patch():
+            code = _run_pipeline(
+                Pipeline=__import__("v2ray_finder.pipeline", fromlist=["Pipeline"]).Pipeline(
+                    sources=[], check_health=False
+                ),
+                stop_ctrl=stop, output=None, limit=0, stats_only=False,
+            )
+        self.assertEqual(code, 0)
 
-def test_main_output_flag_saves_file(mock_console, mock_progress, tmp_path):
-    """main() with -o writes servers to file."""
-    out_file = str(tmp_path / "out.txt")
-    with patch("sys.argv", ["v2ray-finder-rich", "-o", out_file]):
-        mock_finder = Mock()
-        mock_finder.should_stop.return_value = False
-        with patch(
-            "v2ray_finder.cli_rich.fetch_servers",
-            return_value=["vmess://s1", "vless://s2"],
-        ):
-            with patch(
-                "v2ray_finder.cli_rich.V2RayServerFinder", return_value=mock_finder
-            ):
-                main()
-    assert open(out_file).read().count("://") == 2
+    def test_returns_1_when_no_configs(self):
+        from v2ray_finder.cli_rich import _run_pipeline
+        from v2ray_finder.pipeline import Pipeline
+        stop = StopController()
+        empty_result = PipelineResult(configs=[], scores=[])
+        with patch.object(Pipeline, "run", return_value=empty_result):
+            code = _run_pipeline(
+                Pipeline=Pipeline(sources=[], check_health=False),
+                stop_ctrl=stop, output=None, limit=0, stats_only=False,
+            )
+        self.assertEqual(code, 1)
 
+    def test_returns_130_when_stopped(self):
+        from v2ray_finder.cli_rich import _run_pipeline
+        from v2ray_finder.pipeline import Pipeline
+        stop = StopController()
 
-def test_main_output_with_health_check(mock_console, mock_progress, tmp_path):
-    """main() with -o -c extracts config strings from health dicts."""
-    out_file = str(tmp_path / "healthy.txt")
-    servers = [
-        {
-            "config": "vmess://s1",
-            "protocol": "vmess",
-            "health_status": "healthy",
-            "quality_score": 90.0,
-            "latency_ms": 50.0,
-        },
-        {
-            "config": "vless://s2",
-            "protocol": "vless",
-            "health_status": "healthy",
-            "quality_score": 80.0,
-            "latency_ms": 70.0,
-        },
-    ]
-    with patch("sys.argv", ["v2ray-finder-rich", "-o", out_file, "-c"]):
-        mock_finder = Mock()
-        mock_finder.get_servers_with_health.return_value = servers
-        mock_finder.should_stop.return_value = False
-        with patch("v2ray_finder.cli_rich.V2RayServerFinder", return_value=mock_finder):
-            main()
-    lines = [ln for ln in open(out_file).read().splitlines() if ln]
-    assert lines == ["vmess://s1", "vless://s2"]
+        def fake_run(self, stop_event=None, progress_callback=None):
+            if stop_event:
+                stop_event.set()
+            return _make_result()
 
+        with patch.object(Pipeline, "run", fake_run):
+            code = _run_pipeline(
+                Pipeline=Pipeline(sources=[], check_health=False),
+                stop_ctrl=stop, output=None, limit=0, stats_only=False,
+            )
+        self.assertEqual(code, 130)
 
-def test_main_stats_only_flag(mock_console, mock_progress):
-    """main() with --stats-only calls show_stats."""
-    with patch("sys.argv", ["v2ray-finder-rich", "--stats-only"]):
-        mock_finder = Mock()
-        mock_finder.should_stop.return_value = False
-        with patch("v2ray_finder.cli_rich.fetch_servers", return_value=["vmess://s1"]):
-            with patch("v2ray_finder.cli_rich.show_stats") as mock_stats:
-                with patch(
-                    "v2ray_finder.cli_rich.V2RayServerFinder",
-                    return_value=mock_finder,
-                ):
-                    main()
-        mock_stats.assert_called()
+    def test_output_file_written_on_success(self):
+        from v2ray_finder.cli_rich import _run_pipeline
+        from v2ray_finder.pipeline import Pipeline
+        stop = StopController()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
+            fname = f.name
+        try:
+            with patch.object(Pipeline, "run", return_value=_make_result()), \
+                 patch("v2ray_finder.cli_rich.RICH_AVAILABLE", False):
+                _run_pipeline(
+                    Pipeline=Pipeline(sources=[], check_health=False),
+                    stop_ctrl=stop, output=fname, limit=0, stats_only=False,
+                )
+            with open(fname) as f:
+                lines = [l.strip() for l in f if l.strip()]
+            self.assertEqual(len(lines), len(SAMPLE))
+        finally:
+            os.unlink(fname)
 
 
-def test_main_no_servers_exits_1(mock_console, mock_progress):
-    """main() with -o exits 1 when fetch_servers returns empty list."""
-    with patch("sys.argv", ["v2ray-finder-rich", "-o", "out.txt"]):
-        mock_finder = Mock()
-        mock_finder.should_stop.return_value = False
-        with patch("v2ray_finder.cli_rich.fetch_servers", return_value=[]):
-            with patch(
-                "v2ray_finder.cli_rich.V2RayServerFinder", return_value=mock_finder
-            ):
-                with pytest.raises(SystemExit) as exc:
-                    main()
-    assert exc.value.code == 1
+# ---------------------------------------------------------------------------
+# CLI entry point (non-interactive)
+# ---------------------------------------------------------------------------
+
+class TestCLIRichNonInteractive(unittest.TestCase):
+
+    def _patch_pipeline(self, result=None):
+        from v2ray_finder import pipeline as _pl
+        return patch.object(_pl.Pipeline, "run", return_value=result or _make_result())
+
+    def test_stats_only_exits_0(self):
+        with self._patch_pipeline():
+            _, code = _run_main("--stats-only")
+        self.assertEqual(code, 0)
+
+    def test_output_writes_file(self):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
+            fname = f.name
+        try:
+            with self._patch_pipeline():
+                _, code = _run_main("-o", fname)
+            self.assertEqual(code, 0)
+            with open(fname) as f:
+                lines = [l.strip() for l in f if l.strip()]
+            self.assertGreater(len(lines), 0)
+        finally:
+            os.unlink(fname)
+
+    def test_cache_flag_forwarded(self):
+        from v2ray_finder import pipeline as _pl
+        with patch.object(_pl.Pipeline, "__init__", return_value=None) as mock_init, \
+             patch.object(_pl.Pipeline, "run",     return_value=PipelineResult()):
+            _run_main("--stats-only", "--cache")
+            _, kw = mock_init.call_args
+            self.assertTrue(kw.get("cache_enabled"))
+
+    def test_cache_ttl_forwarded(self):
+        from v2ray_finder import pipeline as _pl
+        with patch.object(_pl.Pipeline, "__init__", return_value=None) as mock_init, \
+             patch.object(_pl.Pipeline, "run",     return_value=PipelineResult()):
+            _run_main("--stats-only", "--cache-ttl", "900")
+            _, kw = mock_init.call_args
+            self.assertEqual(kw.get("cache_ttl"), 900)
+
+    def test_check_health_forwarded(self):
+        from v2ray_finder import pipeline as _pl
+        with patch.object(_pl.Pipeline, "__init__", return_value=None) as mock_init, \
+             patch.object(_pl.Pipeline, "run",     return_value=PipelineResult()):
+            _run_main("--stats-only", "-c")
+            _, kw = mock_init.call_args
+            self.assertTrue(kw.get("check_health"))
+
+    def test_min_quality_forwarded(self):
+        from v2ray_finder import pipeline as _pl
+        with patch.object(_pl.Pipeline, "__init__", return_value=None) as mock_init, \
+             patch.object(_pl.Pipeline, "run",     return_value=PipelineResult()):
+            _run_main("--stats-only", "--min-quality", "60")
+            _, kw = mock_init.call_args
+            self.assertEqual(kw.get("min_quality_score"), 60.0)
 
 
-def test_main_limit_flag_slices_servers(mock_console, mock_progress, tmp_path):
-    """main() with -l limits the number of saved servers."""
-    out_file = str(tmp_path / "limited.txt")
-    with patch("sys.argv", ["v2ray-finder-rich", "-o", out_file, "-l", "2"]):
-        mock_finder = Mock()
-        mock_finder.should_stop.return_value = False
-        all_servers = ["vmess://s1", "vless://s2", "trojan://s3"]
-        with patch("v2ray_finder.cli_rich.fetch_servers", return_value=all_servers):
-            with patch(
-                "v2ray_finder.cli_rich.V2RayServerFinder", return_value=mock_finder
-            ):
-                main()
-    saved = [ln for ln in open(out_file).read().splitlines() if ln]
-    assert len(saved) == 2
+if __name__ == "__main__":
+    unittest.main()
