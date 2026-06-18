@@ -40,33 +40,29 @@
 ---
 
 ### P0 — Critical (correctness; pipeline silently produces wrong/empty results)
-- [ ] **C1. xray availability check is broken** — `xray_connectivity.py::RealConnectivityChecker.is_xray_available()` returns `runner.binary_path is not None`, but `XrayRunner` only has `_binary_path` (the *passed* value), so it is `None` whenever no explicit path is given even when xray is on PATH. Effect: Layer 3 (Google 204 via real xray) never runs.
-  - Fix: `return runner.find_binary() is not None` (or `runner.is_available()`).
-- [ ] **C2. Per-server RealConnectivityChecker churn** — `health_checker.py::HealthChecker.check_server_health()` builds a new `RealConnectivityChecker` for every server; under `check_servers_batch` (max_workers=50) this risks overlapping xray port binds and 50 concurrent heavy processes.
-  - Fix: instantiate one shared checker in `HealthChecker.__init__` (guarded by `check_google_204`); add a separate, low Layer-3 concurrency cap (≈5).
-- [ ] **C3. Structural dedup bypassed** — `core.py::get_all_servers()` dedupes with `dict.fromkeys`-style string matching; `normalizer.deduplicate_servers` / `deduplicate_across_sources` is never called in the main path.
-  - Fix: route `get_all_servers` through `normalizer.deduplicate_servers`; feed per-source results into `deduplicate_across_sources` to capture overlap ratios.
-- [ ] **C4. Trust & overlap never reach the scorer** — `score_servers` accepts `source_trust`/`overlap_ratio`, but nothing in `core.py` maps `SourceEntry.trust` or the overlap map into the health-result dicts. Two of six scoring dimensions are dead weight.
-  - Fix: thread `source_url → SourceEntry` and the overlap map from `deduplicate_across_sources` into each health-result dict before calling `score_servers`.
+- [x] **C1. xray availability check is broken** — Fixed: `return runner.find_binary() is not None`
+- [x] **C2. Per-server RealConnectivityChecker churn** — Fixed: shared checker in `HealthChecker.__init__`, Layer-3 concurrency capped at 5.
+- [x] **C3. Structural dedup bypassed** — Fixed: `get_all_servers` routes through `normalizer.deduplicate_across_sources`.
+- [x] **C4. Trust & overlap never reach the scorer** — Fixed: `source_url → SourceEntry` and overlap map threaded into health-result dicts.
 
 ### P1 — Architecture (structural; unlocks correctness and maintainability)
-- [ ] **A1. Pipeline orchestrator** — create `pipeline.py` with a `Pipeline` class owning `SourceRegistry`, dedup, `HealthChecker`, and `scorer.score_servers`, exposing one `run(stop_event, progress_callback)`; migrate CLI / Rich TUI / GUI to it.
-- [ ] **A2. threading.Event stop mechanism** — replace `core.py::_stop_requested` (bool) with an injected `threading.Event`; share it across both `StopController` variants and the GUI `WorkerThread`.
-- [ ] **A3. Use AsyncFetcher in the real path** — `core.py::get_servers_from_known_sources` fetches 32 sources serially via `requests.get`; switch to `AsyncFetcher.fetch_many`, preserving per-URL success/failure recording in `SourceRegistry`.
-- [ ] **A4. De-duplicate probe/scoring helpers** — `_socks5_http_get` is duplicated in `health_checker.py` and `xray_connectivity.py`; `_latency_to_score` is triplicated (`scorer.py` 0–1 scale vs `health_checker.py`/`xray_connectivity.py` 0–100 scale). Extract `probes.py` (SOCKS5) and `scoring_curves.py` (single curve) to prevent divergence.
+- [x] **A1. Pipeline orchestrator** — `pipeline.py` with `Pipeline`, `PipelineResult`, `StopController`.
+- [x] **A2. threading.Event stop mechanism** — `threading.Event` shared across `StopController` and GUI `WorkerThread`.
+- [x] **A3. Use AsyncFetcher in the real path** — `AsyncFetcher.fetch_many` is the real fetch path.
+- [x] **A4. De-duplicate probe/scoring helpers** — `probes.py` and `scoring_curves.py` extracted; both consumers import from them.
 
 ### P2 — Technical Debt
-- [ ] **D1. google_204 weight = 0** — `scorer.py` `_REACH_W_G204 = 0.00`. After C1/C2 land, rebalance (e.g. TCP 0.4 / HTTP 0.2 / G204 0.4); the highest-signal dimension is currently discarded.
-- [ ] **D2. `from_env` kwarg collision** — `core.py::from_env(**kwargs)` raises `TypeError` if a caller also passes `token=`; guard or document.
-- [ ] **D3. `XrayRunner.run` broken stub** — base `XrayRunner.run` raises `NotImplementedError` while `XrayBinaryManager.run` is the real async ctx; same name, opposite semantics. Rename/remove the stub.
-- [ ] **D4. `get_servers_sorted` does not sort** — it only enumerates with metadata. Either implement score-based sorting or rename to `get_servers_with_metadata`.
+- [x] **D1. google_204 weight = 0** — Rebalanced to 0.10.
+- [x] **D2. `from_env` kwarg collision** — `kwargs.pop("token", None)` guard added.
+- [x] **D3. `XrayRunner.run` broken stub** — Base raises `NotImplementedError`; `XrayBinaryManager.run` is the real async ctx.
+- [x] **D4. `get_servers_sorted` does not sort** — Deprecated with `warnings.warn`, renamed to `get_servers_with_metadata`.
 
 ### P3 — Quick Wins (small, high-impact)
-- [ ] **Q1. Fix `is_xray_available`** — one-line change (same as C1); listed here because it is trivial and unblocks an entire layer.
-- [ ] **Q2. Document MemoryCache eviction** — `cache.py::MemoryCache` is FIFO, not LRU; add a docstring note to prevent misuse.
-- [ ] **Q3. Warn on dropped token** — `core.py::_validate_token` silently ignores invalid tokens; emit a `logger.warning`.
-- [ ] **Q4. Hoist zero-score sentinel** — `scorer.py::sort_by_quality` builds `ServerScore("", "")` per item in the sort key; replace with a module-level `_ZERO_SCORE`.
-- [ ] **Q5. Populate CHANGELOG `[Unreleased]`** — currently empty.
+- [x] **Q1. Fix `is_xray_available`** — Fixed.
+- [x] **Q2. Document MemoryCache eviction** — FIFO docstring added.
+- [x] **Q3. Warn on dropped token** — `logger.warning` added.
+- [x] **Q4. Hoist zero-score sentinel** — `_ZERO_SCORE` module-level sentinel in scorer.py.
+- [x] **Q5. Populate CHANGELOG `[Unreleased]`** — Done.
 
 ### Keep As-Is (well-designed; do not refactor without cause)
 - [x] `result.py` Ok/Err Result type — clean and well-used.
@@ -76,11 +72,266 @@
 - [x] `cache.py` backend abstraction — clean ABC, graceful diskcache fallback.
 - [x] Piecewise-linear latency curve — sound thresholds (consolidate per A4).
 
-### Recommended Execution Order
-1. C1 (unblocks Layer 3) → C2 (make Layer 3 safe under concurrency)
-2. C3 + C4 (real dedup + trust/overlap wiring → scoring becomes meaningful)
-3. A1 (Pipeline orchestrator) → A2 (Event-based stop)
-4. A3 (async fetch) → A4 (shared helpers)
-5. D1 (rebalance weights now that G204 runs) → remaining D/Q items
+---
+
+## v1.0.0 Readiness Review — [2026-06-18]
+
+Scope: production-readiness at scale (100+ sources, 10k+ configs), public
+API quality, and PyPI publishability. Analysis only — no code in this pass.
+Each actionable item has a ready-to-paste aider prompt directly beneath it.
+
+### Status Legend
+- [ ] TODO   [~] IN PROGRESS   [x] DONE
 
 ---
+
+## 1. Critical Issues (would fail in production)
+
+### [ ] V1-C1. Per-server source attribution in pipeline is wrong
+`pipeline.py::Pipeline._run_health` attributes EVERY healthy server to the
+*first* source URL found in `overlap_map`. This means `source_trust` and
+`overlap_ratio` (two scoring dimensions, 0.15 of total weight) are identical
+for all servers — the C4 fix is structurally defeated inside the Pipeline.
+At scale every config gets the same (often wrong) trust/overlap.
+
+```
+In src/v2ray_finder/pipeline.py, fix the source attribution bug in _run_health. Currently it assigns the first source
+URL from overlap_map to every healthy server. Instead, build a per-config source map during fetch: change
+_fetch_all/_fetch_all_async/_fetch_all_sync to also return, or store on self, a dict mapping each config string to the
+SourceEntry it came from (first source wins on collision). Then in _run_health, look up each h.config in that map to set
+source_url, source_trust (from SourceEntry.trust.value), and overlap_ratio (from overlap_map[source_url]). Add a unit
+test in tests/test_pipeline.py that fetches two sources with different trust levels and asserts each scored server
+carries the trust of its actual originating source.
+```
+
+### [ ] V1-C2. AsyncFetcher / pipeline open a new httpx client per request
+`pipeline.py::_fetch_all_async._fetch_one` constructs `httpx.AsyncClient(...)`
+inside the per-source coroutine, so connection pooling never happens — with
+100+ sources this opens 100+ TLS sessions and exhausts ephemeral ports.
+`async_fetcher.py` is the documented real fetch path (A3) but `pipeline.py`
+re-implements its own httpx loop instead of using it.
+
+```
+In src/v2ray_finder/pipeline.py, refactor _fetch_all_async to create ONE shared httpx.AsyncClient (with
+limits=httpx.Limits(max_connections=self.fetch_concurrency, max_keepalive_connections=self.fetch_concurrency)) and
+reuse it across all source fetches via the existing semaphore. Move client creation outside _fetch_one so the single
+client is passed in. Ensure the client is closed in a finally block. Do not change the public signature of
+_fetch_all_async. Update tests/test_pipeline.py mocks accordingly.
+```
+
+### [ ] V1-C3. No GitHub rate-limit coordination on the async path
+`core.py` tracks rate limits via `_check_rate_limit`, but the Pipeline async
+fetch path bypasses `core.py` entirely and never inspects
+`X-RateLimit-Remaining`. At 100+ sources including GitHub raw/API endpoints,
+this triggers 403/429 bans mid-run with no backoff.
+
+```
+In src/v2ray_finder/pipeline.py, add GitHub rate-limit awareness to _fetch_all_async. After each response, if the host
+is api.github.com or raw.githubusercontent.com and the response has X-RateLimit-Remaining, log a warning when remaining
+< 10% of limit, and if status is 403/429 with a Retry-After or X-RateLimit-Reset header, skip remaining GitHub-host
+sources for this run rather than hammering them. Add a Pipeline.__init__ param github_token: Optional[str] = None that,
+when set, adds the Authorization header to GitHub-host requests only. Add tests covering: 429 short-circuits GitHub
+sources, non-GitHub sources continue, token header applied only to github hosts.
+```
+
+### [ ] V1-C4. Unbounded memory on 10k+ configs (no streaming)
+`Pipeline.run` holds `servers_by_source`, `configs`, `health_dicts`, and
+`scores` simultaneously. With 10k+ configs across 100+ sources the raw text
+plus parsed lists plus ServerHealth plus ServerScore objects all live at once.
+There is no cap between fetch and dedup, so a single huge source can OOM.
+
+```
+In src/v2ray_finder/pipeline.py, add a per-source config cap and a global pre-dedup cap. Add Pipeline.__init__ params
+max_configs_per_source: int = 5000 and max_total_configs: Optional[int] = 50000. In _parse_configs callers, truncate
+each source's parsed list to max_configs_per_source. After dedup, before health checks, truncate to max_total_configs if
+set. Log how many were dropped. Add tests asserting both caps are enforced.
+```
+
+---
+
+## 2. Architecture Improvements (structural, for v1.0.0)
+
+### [ ] V1-A1. CLI does not expose Pipeline parameters
+`cli.py` / `cli_rich.py` still call legacy `finder.get_*` methods and do not
+expose check_http_probe, check_google_204, fetch_concurrency,
+min_quality_score, limit, binary_path, or an output format. This is a stated
+v1.0.0 requirement.
+
+```
+In src/v2ray_finder/cli.py, migrate the non-interactive path to use v2ray_finder.pipeline.Pipeline. Add argparse flags:
+--health/--no-health (check_health), --http-probe (check_http_probe), --google-204 (check_google_204), --concurrency N
+(fetch_concurrency, default 10), --min-quality FLOAT (min_quality_score), --limit N, --xray-binary PATH (binary_path),
+and --format {raw,json,table} (default raw). Build a Pipeline from these flags, run it with a StopController wired to
+Ctrl+C, and render output per --format: raw = one config per line, json = list of
+{config,protocol,grade,total,latency_ms}, table = aligned columns. Keep the existing -o/-s/-q/-t flags working.
+Preserve exit code 130 on interruption with partial save. Add tests in tests/test_cli.py for each new flag and each
+output format.
+```
+
+```
+In src/v2ray_finder/cli_rich.py, migrate the non-interactive and interactive paths to v2ray_finder.pipeline.Pipeline.
+Add the same flags as cli.py (--health/--no-health, --http-probe, --google-204, --concurrency, --min-quality, --limit,
+--xray-binary, --format raw|json|table). Wire Pipeline.run's progress_callback to a Rich Progress bar with one task per
+stage (fetch/health/score). Render table format using rich.table.Table with columns Grade, Protocol, Latency, Score,
+Config. Keep StopController wired to Ctrl+C and partial-save behaviour. Add tests in tests/test_cli_rich.py.
+```
+
+### [ ] V1-A2. GUI is not wired to Pipeline
+`gui/main_window.py::WorkerThread` still calls
+`finder.get_servers_from_known_sources` / `get_servers_from_github` and does
+not run health checks, scoring, progress, or sortable scored results — all
+stated v1.0.0 requirements.
+
+```
+In src/v2ray_finder/gui/main_window.py, rewrite WorkerThread to run v2ray_finder.pipeline.Pipeline. Pass a
+StopController and connect its event to a Stop button. Emit a new progress(stage:str, current:int, total:int,
+message:str) signal from Pipeline's progress_callback (marshal via the worker thread, not directly to widgets). Emit
+finished(result: PipelineResult). Add GUI controls for check_health, check_http_probe, check_google_204,
+min_quality_score, fetch_concurrency, and limit. In MainWindow.on_fetch_finished, populate the table from result.scores
+with sortable columns Grade, Protocol, Latency(ms), Score, Config (use QTableWidget.setSortingEnabled(True) and numeric
+sort keys). Add an Export button that writes the displayed configs to a chosen file. Update tests/test_gui.py to assert
+the worker builds a Pipeline, the progress signal fires, and the table sorts by score.
+```
+
+### [ ] V1-A3. Public API surface is undefined
+There is no curated `__all__`, no top-level convenience function, and callers
+must know internal module layout. For a trusted PyPI library the package
+top-level should expose a stable, documented surface.
+
+```
+In src/v2ray_finder/__init__.py, define an explicit __all__ exporting the stable public API: Pipeline, PipelineResult,
+StopController, ServerScore, ServerHealth, HealthStatus, V2RayServerFinder, and the exception classes (V2RayFinderError
+and subclasses). Add a top-level convenience function find_servers(check_health: bool = True, limit: Optional[int] =
+None, **kwargs) -> PipelineResult that constructs a Pipeline and calls run(). Add a module docstring documenting the
+public API and a one-line usage example. Do not export internal helpers (_parse_configs, probes, scoring_curves
+internals). Add a test asserting every name in __all__ is importable from v2ray_finder.
+```
+
+### [ ] V1-A4. No structured result serialization
+`PipelineResult` and `ServerScore` have no `to_dict`/`to_json`. JSON output
+(CLI --format json, GUI export, programmatic use) each re-implement
+serialization, guaranteeing drift.
+
+```
+Add to_dict() methods to ServerScore in src/v2ray_finder/scorer.py and to PipelineResult in
+src/v2ray_finder/pipeline.py. ServerScore.to_dict returns config, protocol, total, grade, latency_ms, and all component
+scores. PipelineResult.to_dict returns stats plus a "servers" list of ServerScore.to_dict() entries. Add
+PipelineResult.to_json(indent: int = 2) that uses json.dumps over to_dict. Add tests verifying round-trip-safe keys and
+that to_json produces valid JSON.
+```
+
+---
+
+## 3. Technical Debt (fix before v1.0.0)
+
+### [ ] V1-D1. Two parallel fetch implementations
+`async_fetcher.py` (A3 path) and `pipeline.py::_fetch_all_async` both
+implement httpx fetching with retry/backoff. This is the exact duplication
+A4 was meant to prevent, one layer up.
+
+```
+Refactor src/v2ray_finder/pipeline.py to delegate all HTTP fetching to v2ray_finder.async_fetcher.AsyncFetcher instead
+of its own httpx loop. Pipeline should construct one AsyncFetcher(max_concurrent=self.fetch_concurrency,
+timeout=self.fetch_timeout, headers=...), call fetch_many(urls), then map FetchResult -> parsed configs per source URL.
+Keep the sync fallback delegating to AsyncFetcher.fetch_many (which already falls back to requests). Remove the now-dead
+_fetch_all_async httpx code. Preserve stop_event checks and progress callbacks. Update tests/test_pipeline.py to mock
+AsyncFetcher.fetch_many.
+```
+
+### [ ] V1-D2. Inconsistent timeout/error semantics across modules
+`core.py` returns Result[Ok/Err], `pipeline.py` swallows exceptions and logs,
+`async_fetcher.py` returns FetchResult with .error strings. Three error
+models. A public library needs one predictable error surface.
+
+```
+Document and unify the error model in CONTRIBUTING/docs and code. Decision: low-level fetchers return FetchResult/Result
+(no raising); Pipeline never raises for per-source failures but records them in PipelineResult.stats under a new
+"errors" dict {source_url: error_str}. Add result.stats["errors"] and a PipelineResult.failed_sources property. Ensure
+Pipeline.run still raises only for programmer errors (bad args), never for network failures. Add a test that a failing
+source appears in result.stats["errors"] and does not abort the run.
+```
+
+### [ ] V1-D3. Missing py.typed marker and full type coverage
+The package ships type hints but no `py.typed`, so downstream `mypy` ignores
+them. Several public functions also use bare `dict`/`list`.
+
+```
+Add an empty py.typed marker file at src/v2ray_finder/py.typed and include it in package data in pyproject.toml
+(tool.setuptools.package-data or equivalent). Tighten public signatures in pipeline.py, scorer.py, and __init__.py to
+use precise generics (List[ServerScore], Dict[str, float], Optional[...]). Add a mypy configuration section to
+pyproject.toml targeting the v2ray_finder package with disallow_untyped_defs for public modules. Do not add mypy to
+required CI gates yet; just make it pass for the public surface.
+```
+
+### [ ] V1-D4. No retry/backoff on Layer-3 xray startup at scale
+`xray_connectivity.py` caps Layer 3 concurrency at 5 (C2) but a flaky binary
+or port contention yields hard failures with no retry, so legitimate servers
+get scored 0 under load.
+
+```
+In src/v2ray_finder/xray_connectivity.py, add one retry with a fresh free port in check_one (and the async
+check_server_real fallback path) when xray fails to open its SOCKS5 port within startup_timeout. Use find_free_port()
+for the retry port. Log at debug level. Add a test simulating a first-attempt port-bind failure that succeeds on retry.
+```
+
+---
+
+## 4. Quick Wins (small, high-impact)
+
+### [ ] V1-Q1. CHANGELOG and version bump for v1.0.0
+
+```
+Update CHANGELOG.md: move the [Unreleased] entries under a new [1.0.0] heading summarising the Pipeline orchestrator,
+async fetch, 3-layer health checks, 7-dimension scorer, and the CLI/GUI Pipeline migration. Bump the version to 1.0.0 in
+pyproject.toml and src/v2ray_finder/__init__.py (__version__). Add a fresh empty [Unreleased] section.
+```
+
+### [ ] V1-Q2. README quickstart for the public API
+
+```
+Update README.md with a Quickstart section showing: pip install v2ray-finder, a 5-line Python example using
+v2ray_finder.find_servers() and iterating result.scores, and the three CLI invocations (raw/json/table output). Add a
+short API table listing Pipeline, PipelineResult, StopController, find_servers. Keep it under 60 lines.
+```
+
+### [ ] V1-Q3. Deterministic score tie-breaking
+`scorer.score_servers` sorts by `total` only; equal totals produce
+nondeterministic order across runs, breaking reproducible output/tests.
+
+```
+In src/v2ray_finder/scorer.py, make score_servers and sort_by_score sort by a stable composite key: primary total
+descending, secondary latency_ms ascending (None last), tertiary config string ascending. Add a test with three servers
+sharing the same total asserting a deterministic, repeatable order.
+```
+
+### [ ] V1-Q4. Expose cache stats and a clear-cache hook in Pipeline
+Layer-3 has a result cache (`_ResultCache`) but Pipeline neither surfaces its
+stats nor lets callers clear it between runs.
+
+```
+In src/v2ray_finder/pipeline.py, when check_google_204 is enabled, expose the shared RealConnectivityChecker's
+cache_stats in PipelineResult.stats under "layer3_cache" and add a Pipeline.clear_caches() method that clears the
+Layer-3 result cache. Add a test asserting stats include layer3_cache when Layer 3 runs.
+```
+
+---
+
+## 5. Keep As-Is (well-designed, don't touch)
+- [x] normalizer.py structural fingerprinting + deduplicate_across_sources — correct and well-tested.
+- [x] scoring_curves.py / probes.py shared helpers (A4) — clean single source of truth.
+- [x] sources.py SourceEntry / SourceTrust / get_enabled_sources — solid, filterable.
+- [x] exceptions.py hierarchy with to_dict/details — comprehensive.
+- [x] result.py Ok/Err — keep as the low-level fetch error type.
+- [x] cache.py backend abstraction (FIFO documented per Q2) — fine for v1.0.0.
+- [x] StopController / threading.Event cancellation model (A2) — correct, reused everywhere.
+
+---
+
+## Recommended Execution Order for v1.0.0
+1. V1-C1, V1-C2 (correctness + pooling — both inside pipeline, do together)
+2. V1-D1 (collapse the two fetch paths; subsumes part of C2/C3 cleanup)
+3. V1-C3, V1-C4 (rate-limit + memory caps on the unified fetch path)
+4. V1-A1, V1-A2 (CLI + GUI Pipeline wiring — the headline v1.0.0 deliverables)
+5. V1-A3, V1-A4, V1-D2 (public API surface + serialization + error model)
+6. V1-D3, V1-D4 (typing marker + xray retry)
+7. V1-Q1..Q4 (changelog, README, determinism, cache stats)
