@@ -22,11 +22,11 @@ before every source fetch and every health-check batch.
 
 Async fetch
 -----------
-When ``httpx`` is installed, :meth:`Pipeline._fetch_all` uses
-``asyncio`` + a single shared ``httpx.AsyncClient`` with connection
-pooling and a semaphore capped at ``fetch_concurrency`` (default 10).
-If ``httpx`` is not available the pipeline falls back to sequential
-``requests`` calls so existing deployments are not broken.
+All HTTP fetching is delegated to :class:`~async_fetcher.AsyncFetcher`
+which automatically uses aiohttp (preferred), httpx, or falls back to
+sync ``requests`` if neither async library is available (V1-D1).
+Connection pooling and retry/backoff are handled entirely by
+``AsyncFetcher``.
 
 Source attribution
 ------------------
@@ -51,13 +51,13 @@ Example
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
+from .async_fetcher import AsyncFetcher
 from .normalizer import deduplicate_across_sources
 from .scorer import ServerScore, score_servers, sort_by_quality
 from .sources import SourceEntry, SourceTrust, get_enabled_sources
@@ -172,10 +172,9 @@ class Pipeline:
     health_batch_size:
         Number of servers per async health-check batch.  Default: ``100``.
     fetch_timeout:
-        HTTP timeout for source fetches.  Default: ``15``.
+        HTTP timeout for source fetches in seconds.  Default: ``15``.
     fetch_concurrency:
         Maximum number of concurrent async source fetches.  Default: ``10``.
-        Ignored when httpx is not installed (fallback uses sequential fetch).
     limit:
         Cap the number of configs returned after dedup.  Default: ``None``.
     binary_path:
@@ -238,7 +237,7 @@ class Pipeline:
         result = PipelineResult()
         stats: Dict[str, Any] = {"fetched": 0, "deduped": 0, "healthy": 0, "scored": 0}
 
-        # ── Stage 1: Fetch (async when httpx available) ─────────────────────
+        # ── Stage 1: Fetch ──────────────────────────────────────────────
         servers_by_source = self._fetch_all(_stop, progress_callback)
         stats["fetched"] = sum(len(v) for v in servers_by_source.values())
         if _stop.is_set():
@@ -340,7 +339,7 @@ class Pipeline:
         }
 
     # ------------------------------------------------------------------
-    # Stage 1: Fetch
+    # Stage 1: Fetch  (V1-D1: delegated entirely to AsyncFetcher)
     # ------------------------------------------------------------------
 
     def _fetch_all(
@@ -348,155 +347,47 @@ class Pipeline:
         stop_event: threading.Event,
         progress_callback: ProgressCallback,
     ) -> Dict[str, List[str]]:
-        """Dispatch to async or sync fetch depending on httpx availability."""
-        try:
-            import httpx  # noqa: F401
-            return asyncio.run(
-                self._fetch_all_async(stop_event, progress_callback)
-            )
-        except ImportError:
-            logger.debug(
-                "[pipeline] httpx not installed — using sequential fetch fallback."
-            )
-            return self._fetch_all_sync(stop_event, progress_callback)
+        """Fetch all sources via :class:`~async_fetcher.AsyncFetcher`.
 
-    async def _fetch_all_async(
-        self,
-        stop_event: threading.Event,
-        progress_callback: ProgressCallback,
-    ) -> Dict[str, List[str]]:
-        """Fetch all sources concurrently using a single shared httpx.AsyncClient.
-
-        A single client is created for the entire fetch phase so that TLS
-        sessions and TCP connections are pooled across all source requests
-        (V1-C2).  A semaphore limits simultaneous in-flight requests to
-        ``self.fetch_concurrency``.
+        ``AsyncFetcher`` selects the best available backend (aiohttp →
+        httpx → requests) and handles connection pooling, retry, and
+        backoff internally.  This method translates the list of
+        :class:`~sources.SourceEntry` objects into a URL list, calls
+        ``fetch_many``, then maps results back to
+        ``{source_url: [config, …]}``.
         """
-        import httpx
+        urls  = [s.url for s in self.sources]
+        total = len(urls)
 
-        total     = len(self.sources)
-        semaphore = asyncio.Semaphore(self.fetch_concurrency)
-        results: Dict[str, List[str]] = {}
-        completed = 0
+        self._emit(progress_callback, "fetch", 0, total, "Starting fetch…")
 
-        self._emit(progress_callback, "fetch", 0, total, "Starting async fetch…")
-
-        # V1-C2: ONE shared client for all source fetches (connection pooling).
-        limits = httpx.Limits(
-            max_connections=self.fetch_concurrency,
-            max_keepalive_connections=self.fetch_concurrency,
-        )
-        async with httpx.AsyncClient(
-            timeout=self.fetch_timeout,
-            follow_redirects=True,
+        fetcher = AsyncFetcher(
+            max_concurrent=self.fetch_concurrency,
+            timeout=float(self.fetch_timeout),
             headers={"User-Agent": "v2ray-finder/1.0"},
-            limits=limits,
-        ) as client:
+        )
 
-            async def _fetch_one(source: SourceEntry) -> Tuple[str, List[str]]:
-                """Fetch a single source using the shared client."""
-                async with semaphore:
-                    if stop_event.is_set():
-                        return source.url, []
-                    for attempt in range(2):  # 1 retry on transient error
-                        try:
-                            resp = await client.get(source.url)
-                            if resp.status_code == 200:
-                                configs = _parse_configs(resp.text)
-                                logger.debug(
-                                    "[pipeline] %s: %d configs (async).",
-                                    source.label, len(configs),
-                                )
-                                return source.url, configs
-                            else:
-                                logger.warning(
-                                    "[pipeline] %s: HTTP %d.",
-                                    source.label, resp.status_code,
-                                )
-                                return source.url, []
-                        except Exception as exc:
-                            if attempt == 0:
-                                logger.debug(
-                                    "[pipeline] %s: transient error (%s), retrying.",
-                                    source.label, exc,
-                                )
-                                await asyncio.sleep(0.5)
-                            else:
-                                logger.warning(
-                                    "[pipeline] %s: fetch failed — %s.",
-                                    source.label, exc,
-                                )
-                                return source.url, []
-                    return source.url, []
-
-            tasks = [
-                asyncio.create_task(_fetch_one(src))
-                for src in self.sources
-                if not stop_event.is_set()
-            ]
-
-            for coro in asyncio.as_completed(tasks):
-                if stop_event.is_set():
-                    for t in tasks:
-                        t.cancel()
-                    break
-                try:
-                    url, configs = await coro
-                    if configs:
-                        results[url] = configs
-                except asyncio.CancelledError:
-                    pass
-                except Exception as exc:
-                    logger.warning("[pipeline] Unexpected async fetch error: %s", exc)
-                finally:
-                    completed += 1
-                    self._emit(
-                        progress_callback, "fetch", completed, total,
-                        f"Fetched {completed}/{total} sources…",
-                    )
-
-        self._emit(progress_callback, "fetch", total, total, "Fetch complete.")
-        return results
-
-    def _fetch_all_sync(
-        self,
-        stop_event: threading.Event,
-        progress_callback: ProgressCallback,
-    ) -> Dict[str, List[str]]:
-        """Sequential fallback fetch (no httpx required)."""
-        import requests as _requests
+        fetch_results = fetcher.fetch_many(urls)
 
         servers_by_source: Dict[str, List[str]] = {}
-        total = len(self.sources)
-
-        for i, source in enumerate(self.sources):
+        for i, fr in enumerate(fetch_results):
             if stop_event.is_set():
                 break
-            self._emit(
-                progress_callback, "fetch", i, total,
-                f"Fetching {source.label}…",
-            )
-            try:
-                resp = _requests.get(
-                    source.url,
-                    timeout=self.fetch_timeout,
-                    headers={"User-Agent": "v2ray-finder/1.0"},
-                    allow_redirects=True,
-                )
-                if resp.status_code == 200:
-                    parsed = _parse_configs(resp.text)
-                    servers_by_source[source.url] = parsed
+            if fr.success and fr.content:
+                parsed = _parse_configs(fr.content)
+                if parsed:
+                    servers_by_source[fr.url] = parsed
                     logger.debug(
-                        "[pipeline] %s: %d configs (sync).",
-                        source.label, len(parsed),
+                        "[pipeline] %s: %d configs.", fr.url, len(parsed)
                     )
-                else:
-                    logger.warning(
-                        "[pipeline] %s: HTTP %d.",
-                        source.label, resp.status_code,
-                    )
-            except Exception as exc:
-                logger.warning("[pipeline] %s: fetch error — %s.", source.label, exc)
+            else:
+                logger.warning(
+                    "[pipeline] %s: fetch failed — %s.", fr.url, fr.error
+                )
+            self._emit(
+                progress_callback, "fetch", i + 1, total,
+                f"Fetched {i + 1}/{total} sources…",
+            )
 
         self._emit(progress_callback, "fetch", total, total, "Fetch complete.")
         return servers_by_source
@@ -554,7 +445,7 @@ class Pipeline:
 
         result_dicts: List[Dict[str, Any]] = []
         for h in healthy:
-            # V1-C1: per-config source attribution (not first-source-wins globally)
+            # V1-C1: per-config source attribution
             src_url   = config_source_map.get(h.config, "")
             src_trust = self._source_trust_map.get(src_url, 1)
             result_dicts.append({
