@@ -461,9 +461,7 @@ class TestInteractiveMenu:
         from v2ray_finder.cli import interactive_menu
 
         printed = []
-        with patch(
-            "builtins.input", side_effect=["99", KeyboardInterrupt]
-        ):
+        with patch("builtins.input", side_effect=["99", KeyboardInterrupt]):
             with patch(
                 "builtins.print", side_effect=lambda *a, **_: printed.append(str(a))
             ):
