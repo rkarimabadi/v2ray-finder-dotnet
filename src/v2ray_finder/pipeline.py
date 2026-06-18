@@ -36,6 +36,13 @@ are detected after fetch via ``FetchResult.status_code``.  When a
 skipped for this run.  Pass ``github_token`` to :class:`Pipeline` to
 attach ``Authorization: token <tok>`` to GitHub requests only.
 
+Memory caps (V1-C4)
+--------------------
+``max_configs_per_source`` (default 5 000) truncates each source's
+parsed config list before they are aggregated.  ``max_total_configs``
+(default 50 000) truncates the global list after structural dedup but
+before health checks.  Both caps log how many entries were dropped.
+
 Source attribution
 ------------------
 During fetch each config string is mapped to the source URL it came
@@ -88,6 +95,10 @@ _GITHUB_HOSTS: frozenset = frozenset({
 # Default concurrency cap for async source fetches
 _DEFAULT_FETCH_CONCURRENCY = 10
 
+# Default memory caps (V1-C4)
+_DEFAULT_MAX_CONFIGS_PER_SOURCE: int = 5_000
+_DEFAULT_MAX_TOTAL_CONFIGS: int      = 50_000
+
 # Type alias for the progress callback.
 ProgressCallback = Optional[Callable[[str, int, int, str], None]]
 
@@ -110,34 +121,18 @@ def _parse_configs(text: str) -> List[str]:
 # ---------------------------------------------------------------------------
 
 class StopController:
-    """Thin wrapper around :class:`threading.Event` for pipeline cancellation.
-
-    CLI ``KeyboardInterrupt`` handlers and GUI worker threads both call
-    ``controller.stop()``.  The pipeline polls ``controller.event``.
-
-    Usage::
-
-        ctrl = StopController()
-        # In a signal handler or GUI button:
-        ctrl.stop()
-        # In the pipeline:
-        if ctrl.is_set():
-            break
-    """
+    """Thin wrapper around :class:`threading.Event` for pipeline cancellation."""
 
     def __init__(self) -> None:
         self.event: threading.Event = threading.Event()
 
     def stop(self) -> None:
-        """Signal the pipeline to stop."""
         self.event.set()
 
     def reset(self) -> None:
-        """Clear the stop signal (e.g. before a fresh run)."""
         self.event.clear()
 
     def is_set(self) -> bool:
-        """Return True if stop has been requested."""
         return self.event.is_set()
 
 
@@ -147,16 +142,7 @@ class StopController:
 
 @dataclass
 class PipelineResult:
-    """Container for the output of a completed pipeline run.
-
-    Attributes:
-        configs:      Structurally deduplicated raw config strings (unsorted).
-        health_dicts: Health-check result dicts (one per healthy server).
-        scores:       Scored + sorted :class:`~scorer.ServerScore` objects.
-        overlap_map:  Per-source overlap ratios from
-                      :func:`~normalizer.deduplicate_across_sources`.
-        stats:        Miscellaneous counters (fetched, deduped, healthy, scored).
-    """
+    """Container for the output of a completed pipeline run."""
 
     configs:      List[str]                  = field(default_factory=list)
     health_dicts: List[Dict[str, Any]]        = field(default_factory=list)
@@ -166,7 +152,6 @@ class PipelineResult:
 
     @property
     def top_configs(self) -> List[str]:
-        """Return config strings sorted by score (best first)."""
         return [s.config for s in self.scores]
 
 
@@ -206,8 +191,14 @@ class Pipeline:
         Optional GitHub personal-access token.  When provided, an
         ``Authorization: token <tok>`` header is added **only** to
         requests targeting ``api.github.com`` or
-        ``raw.githubusercontent.com``.  Raises the API rate limit from
-        60 to 5 000 requests/hour.
+        ``raw.githubusercontent.com``.
+    max_configs_per_source:
+        Maximum configs to keep from a single source after parsing.
+        Excess entries are dropped and logged.  Default: ``5_000``.
+    max_total_configs:
+        Maximum configs to keep across all sources after structural
+        dedup, before health checks.  Default: ``50_000``.
+        Pass ``None`` to disable the global cap.
     """
 
     def __init__(
@@ -224,21 +215,24 @@ class Pipeline:
         limit: Optional[int] = None,
         binary_path: Optional[str] = None,
         github_token: Optional[str] = None,
+        max_configs_per_source: int = _DEFAULT_MAX_CONFIGS_PER_SOURCE,
+        max_total_configs: Optional[int] = _DEFAULT_MAX_TOTAL_CONFIGS,
     ) -> None:
-        self.sources           = sources or get_enabled_sources()
-        self.check_health      = check_health
-        self.check_http_probe  = check_http_probe
-        self.check_google_204  = check_google_204
-        self.timeout           = timeout
-        self.min_quality_score = min_quality_score
-        self.health_batch_size = health_batch_size
-        self.fetch_timeout     = fetch_timeout
-        self.fetch_concurrency = fetch_concurrency
-        self.limit             = limit
-        self.binary_path       = binary_path
-        self.github_token      = github_token
+        self.sources                = sources or get_enabled_sources()
+        self.check_health           = check_health
+        self.check_http_probe       = check_http_probe
+        self.check_google_204       = check_google_204
+        self.timeout                = timeout
+        self.min_quality_score      = min_quality_score
+        self.health_batch_size      = health_batch_size
+        self.fetch_timeout          = fetch_timeout
+        self.fetch_concurrency      = fetch_concurrency
+        self.limit                  = limit
+        self.binary_path            = binary_path
+        self.github_token           = github_token
+        self.max_configs_per_source = max_configs_per_source
+        self.max_total_configs      = max_total_configs
 
-        # Pre-build source-URL → trust-level lookup (avoids repeated iteration).
         self._source_trust_map: Dict[str, int] = {
             s.url: s.trust.value for s in self.sources
         }
@@ -252,24 +246,29 @@ class Pipeline:
         stop_event: Optional[threading.Event] = None,
         progress_callback: ProgressCallback = None,
     ) -> PipelineResult:
-        """Execute the full pipeline and return a :class:`PipelineResult`.
-
-        Args:
-            stop_event:        A :class:`threading.Event` that, when set,
-                               causes the pipeline to exit at the next
-                               cancellation checkpoint.
-            progress_callback: Optional callback with signature
-                               ``(stage, current, total, message)``.
-
-        Returns:
-            :class:`PipelineResult` with configs, scores, and stats.
-        """
-        _stop = stop_event or threading.Event()  # no-op event if not provided
+        """Execute the full pipeline and return a :class:`PipelineResult`."""
+        _stop = stop_event or threading.Event()
         result = PipelineResult()
-        stats: Dict[str, Any] = {"fetched": 0, "deduped": 0, "healthy": 0, "scored": 0}
+        stats: Dict[str, Any] = {
+            "fetched": 0, "deduped": 0, "healthy": 0, "scored": 0,
+            "dropped_per_source": 0, "dropped_global": 0,
+        }
 
         # ── Stage 1: Fetch ──────────────────────────────────────────────
         servers_by_source = self._fetch_all(_stop, progress_callback)
+
+        # Apply per-source cap (V1-C4)
+        for url in list(servers_by_source.keys()):
+            full = servers_by_source[url]
+            if len(full) > self.max_configs_per_source:
+                dropped = len(full) - self.max_configs_per_source
+                servers_by_source[url] = full[: self.max_configs_per_source]
+                stats["dropped_per_source"] += dropped
+                logger.warning(
+                    "[pipeline] %s: capped at %d configs (%d dropped).",
+                    url, self.max_configs_per_source, dropped,
+                )
+
         stats["fetched"] = sum(len(v) for v in servers_by_source.values())
         if _stop.is_set():
             result.stats = stats
@@ -277,8 +276,20 @@ class Pipeline:
 
         # ── Stage 2: Structural dedup ────────────────────────────────────
         configs, overlap_map = deduplicate_across_sources(servers_by_source)
+
+        # Apply global post-dedup cap (V1-C4)
+        if self.max_total_configs is not None and len(configs) > self.max_total_configs:
+            dropped_global = len(configs) - self.max_total_configs
+            configs = configs[: self.max_total_configs]
+            stats["dropped_global"] = dropped_global
+            logger.warning(
+                "[pipeline] Global cap: kept %d configs, dropped %d after dedup.",
+                self.max_total_configs, dropped_global,
+            )
+
         if self.limit:
             configs = configs[: self.limit]
+
         stats["deduped"]   = len(configs)
         result.configs     = configs
         result.overlap_map = overlap_map
@@ -290,7 +301,6 @@ class Pipeline:
             result.stats = stats
             return result
 
-        # Build per-config source attribution map (V1-C1)
         config_source_map = self._build_config_source_map(servers_by_source)
 
         # ── Stage 3: Health checks ──────────────────────────────────────
@@ -333,17 +343,12 @@ class Pipeline:
         self,
         servers_by_source: Dict[str, List[str]],
     ) -> Dict[str, str]:
-        """Return a mapping from config string → source URL.
-
-        When the same config appears in multiple sources, the source with
-        the highest trust level wins; ties are broken by iteration order
-        (first source wins).
-        """
+        """Return config string → source URL mapping (highest-trust wins)."""
         config_source: Dict[str, str] = {}
         sorted_sources = sorted(
             servers_by_source.keys(),
             key=lambda url: self._source_trust_map.get(url, 1),
-            reverse=False,  # low trust first → high trust overwrites
+            reverse=False,
         )
         for url in sorted_sources:
             for cfg in servers_by_source[url]:
@@ -356,7 +361,6 @@ class Pipeline:
         config_source_map: Dict[str, str],
         overlap_map: Dict[str, float],
     ) -> Dict[str, Any]:
-        """Build a minimal health dict for a config that was not health-checked."""
         src_url   = config_source_map.get(config, "")
         src_trust = self._source_trust_map.get(src_url, 1)
         return {
@@ -376,20 +380,13 @@ class Pipeline:
         stop_event: threading.Event,
         progress_callback: ProgressCallback,
     ) -> Dict[str, List[str]]:
-        """Fetch all sources, with GitHub rate-limit handling (V1-C3).
-
-        Sources are split into GitHub and non-GitHub batches.  GitHub
-        sources get an ``Authorization`` header when ``github_token`` is
-        set.  If any GitHub source returns 403/429, all remaining GitHub
-        sources are skipped for this run.
-        """
+        """Fetch all sources, with GitHub rate-limit handling (V1-C3)."""
         github_urls     = [s.url for s in self.sources if _is_github_url(s.url)]
         non_github_urls = [s.url for s in self.sources if not _is_github_url(s.url)]
         total           = len(self.sources)
 
         self._emit(progress_callback, "fetch", 0, total, "Starting fetch…")
 
-        # Build per-batch headers
         base_headers   = {"User-Agent": "v2ray-finder/1.0"}
         github_headers = dict(base_headers)
         if self.github_token:
@@ -398,7 +395,6 @@ class Pipeline:
         servers_by_source: Dict[str, List[str]] = {}
         completed = 0
 
-        # ---- non-GitHub sources ----
         if non_github_urls and not stop_event.is_set():
             fetcher = AsyncFetcher(
                 max_concurrent=self.fetch_concurrency,
@@ -415,10 +411,9 @@ class Pipeline:
                     f"Fetched {completed}/{total} sources…",
                 )
 
-        # ---- GitHub sources (with rate-limit guard) ----
         if github_urls and not stop_event.is_set():
             github_fetcher = AsyncFetcher(
-                max_concurrent=min(self.fetch_concurrency, 5),  # gentler on GH
+                max_concurrent=min(self.fetch_concurrency, 5),
                 timeout=float(self.fetch_timeout),
                 headers=github_headers,
             )
@@ -430,13 +425,7 @@ class Pipeline:
                     logger.debug(
                         "[pipeline] Skipping %s (GitHub rate-limited).", fr.url
                     )
-                    completed += 1
-                    self._emit(
-                        progress_callback, "fetch", completed, total,
-                        f"Fetched {completed}/{total} sources…",
-                    )
-                    continue
-                if fr.status_code in (403, 429):
+                elif fr.status_code in (403, 429):
                     logger.warning(
                         "[pipeline] GitHub rate limit hit on %s (HTTP %d). "
                         "Skipping remaining GitHub sources. "
@@ -460,7 +449,6 @@ class Pipeline:
         fr: FetchResult,
         servers_by_source: Dict[str, List[str]],
     ) -> None:
-        """Parse configs from a successful FetchResult into *servers_by_source*."""
         if fr.success and fr.content:
             parsed = _parse_configs(fr.content)
             if parsed:
@@ -481,11 +469,6 @@ class Pipeline:
         stop_event: threading.Event,
         progress_callback: ProgressCallback,
     ) -> List[Dict[str, Any]]:
-        """Run health checks on *configs* and return annotated result dicts.
-
-        Each result dict carries the correct ``source_url``, ``source_trust``,
-        and ``overlap_ratio`` for the specific config (V1-C1).
-        """
         from .health_checker import HealthChecker, filter_healthy_servers
 
         checker = HealthChecker(
@@ -550,9 +533,8 @@ class Pipeline:
         total: int,
         message: str,
     ) -> None:
-        """Fire the progress callback if one was provided."""
         if cb is not None:
             try:
                 cb(stage, current, total, message)
             except Exception:
-                pass  # never let a callback crash the pipeline
+                pass
