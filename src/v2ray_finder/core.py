@@ -5,6 +5,7 @@ import datetime
 import logging
 import os
 import re
+import threading
 import time
 import warnings
 from typing import Any, Dict, List, Optional, Tuple
@@ -81,7 +82,13 @@ class V2RayServerFinder:
         self._raise_errors    = raise_errors
         self._health_timeout  = health_timeout
         self._check_google_204 = check_google_204
-        self._stop_requested  = False
+
+        # Use threading.Event instead of a plain bool so that
+        # external threads (GUI WorkerThread, CLI StopController) can
+        # set the stop flag and it takes effect immediately without
+        # waiting for a cooperative poll cycle.
+        self._stop_event: threading.Event = threading.Event()
+
         # Initialized as None; only populated after a successful header parse
         self._last_rate_limit_info: Optional[Dict[str, Any]] = None
 
@@ -98,18 +105,25 @@ class V2RayServerFinder:
             self._session.headers["Authorization"] = f"token {effective_token}"
 
     # ---------------------------------------------------------------------- #
-    # Stop / cancellation
+    # Stop / cancellation  (backed by threading.Event)
     # ---------------------------------------------------------------------- #
 
     def request_stop(self) -> None:
         """Signal all running discovery loops to exit cleanly."""
-        self._stop_requested = True
+        self._stop_event.set()
 
     def should_stop(self) -> bool:
-        return self._stop_requested
+        """Return True if a stop has been requested."""
+        return self._stop_event.is_set()
 
     def reset_stop(self) -> None:
-        self._stop_requested = False
+        """Clear a previous stop signal so the finder can be reused."""
+        self._stop_event.clear()
+
+    @property
+    def stop_event(self) -> threading.Event:
+        """Expose the underlying Event for use with Pipeline / WorkerThread."""
+        return self._stop_event
 
     @property
     def headers(self) -> Dict[str, str]:
@@ -408,17 +422,7 @@ class V2RayServerFinder:
         timeout: int = 15,
         progress_callback=None,
     ) -> List[str]:
-        """Search GitHub and return raw config strings from discovered repos.
-
-        Args:
-            search_keywords: Keywords to use for GitHub search (default: v2ray presets).
-            max_repos:       Maximum number of repos to scan.
-            timeout:         Per-request timeout.
-            progress_callback: Optional callable(current, total, message).
-
-        Returns:
-            Flat list of raw config strings (vmess://, vless://, etc.).
-        """
+        """Search GitHub and return raw config strings from discovered repos."""
         keywords = search_keywords or ["v2ray config", "v2ray subscription", "clash config"]
         all_servers: List[str] = []
 
@@ -444,14 +448,11 @@ class V2RayServerFinder:
                 full_name = repo.get("full_name", "")
                 if not full_name:
                     continue
-
                 if progress_callback:
                     progress_callback(i, len(repos), f"Scanning {full_name}")
-
                 files_result = self.get_repo_files(full_name, timeout=timeout)
                 if files_result.is_err():
                     continue
-
                 for file_info in files_result.unwrap():
                     if self.should_stop():
                         break
@@ -484,9 +485,7 @@ class V2RayServerFinder:
         """Fetch v2ray configs from built-in known subscription URLs.
 
         Returns:
-            Dict mapping source URL → list of raw config strings for that
-            source.  Callers that only need a flat list can call
-            ``list(itertools.chain.from_iterable(result.values()))``.
+            Dict mapping source URL → list of raw config strings for that source.
         """
         sources = get_enabled_sources()
         servers_by_source: Dict[str, List[str]] = {}
@@ -523,20 +522,9 @@ class V2RayServerFinder:
     ) -> Tuple[List[str], Dict[str, float]]:
         """Fetch and deduplicate servers from all enabled sources.
 
-        Uses structural fingerprinting (SHA-256 of protocol+host+port+cred)
-        via :func:`normalizer.deduplicate_across_sources` to remove duplicates
-        that are textually different but structurally identical.
-
-        Args:
-            use_github_search: Also search GitHub repos for configs.
-            limit:             Maximum number of servers to return.
-
         Returns:
-            ``(configs, overlap_map)`` where *configs* is a deduplicated list
-            of raw config strings and *overlap_map* is a dict mapping each
-            source URL to its overlap ratio (fraction of its configs that also
-            appear in at least one other source).  Pass *overlap_map* to
-            ``scorer.score_servers`` for the uniqueness dimension.
+            ``(configs, overlap_map)`` where *overlap_map* maps each source URL
+            to its overlap ratio for use in ``scorer.score_servers``.
         """
         from .normalizer import deduplicate_across_sources
 
@@ -560,17 +548,7 @@ class V2RayServerFinder:
         use_github_search: bool = False,
         check_health: bool = False,
     ) -> tuple:
-        """Fetch servers and write them to a file.
-
-        Args:
-            filename:          Output file path.
-            limit:             Maximum number of servers to write.
-            use_github_search: Also search GitHub repos for configs.
-            check_health:      Run health checks before writing.
-
-        Returns:
-            Tuple of (count_written, filename).
-        """
+        """Fetch servers and write them to a file."""
         if check_health:
             raw, overlap_map = self.get_all_servers(use_github_search=use_github_search)
             health_results = self.get_servers_with_health(raw, overlap_map=overlap_map)
@@ -601,28 +579,7 @@ class V2RayServerFinder:
         overlap_map: Optional[Dict[str, float]] = None,
         **kwargs,
     ):
-        """Run health checks on a list of config strings.
-
-        Args:
-            servers:           List of raw config strings. If None, fetched via
-                               get_all_servers(use_github_search, limit).
-            timeout:           Per-server TCP timeout.
-            min_quality_score: Filter out servers below this score.
-            progress_callback: Optional callable(current, total, message).
-            check_health:      When False, skip health checks and return dicts
-                               with health_checked=False immediately.
-            use_github_search: Passed to get_all_servers when servers is None.
-            limit:             Passed to get_all_servers when servers is None.
-            health_batch_size: Number of servers per health-check batch.
-            overlap_map:       Optional {source_url: overlap_ratio} from
-                               get_all_servers; used to populate overlap_ratio
-                               on each result dict for scoring.
-
-        Returns:
-            List of dicts — health-checked results or plain
-            {config, health_checked: False} when check_health=False or
-            should_stop() is True.
-        """
+        """Run health checks on a list of config strings."""
         resolved_overlap_map: Dict[str, float] = overlap_map or {}
 
         if servers is None:
@@ -634,8 +591,6 @@ class V2RayServerFinder:
         if not check_health or self.should_stop():
             return [{"config": cfg, "health_checked": False} for cfg in servers]
 
-        # Build a quick lookup: config -> source_url, source_trust
-        # so we can annotate each result with scoring metadata.
         source_lookup = self._build_source_lookup()
 
         try:
@@ -652,13 +607,11 @@ class V2RayServerFinder:
         if progress_callback:
             progress_callback(0, len(servers), "Starting health checks…")
 
-        batch_size = health_batch_size
         all_results = []
-
-        for batch_start in range(0, len(servers), batch_size):
+        for batch_start in range(0, len(servers), health_batch_size):
             if self.should_stop():
                 break
-            batch = servers[batch_start:batch_start + batch_size]
+            batch = servers[batch_start:batch_start + health_batch_size]
             try:
                 batch_results = checker.check_batch(batch)
                 all_results.extend(batch_results)
@@ -666,10 +619,9 @@ class V2RayServerFinder:
                 logger.info("KeyboardInterrupt during health check batch — stopping.")
                 self.request_stop()
                 break
-
             if progress_callback:
                 progress_callback(
-                    min(batch_start + batch_size, len(servers)),
+                    min(batch_start + health_batch_size, len(servers)),
                     len(servers),
                     "Health checks in progress…",
                 )
@@ -679,12 +631,11 @@ class V2RayServerFinder:
 
         healthy = filter_healthy_servers(all_results, min_quality_score=min_quality_score)
 
-        # Annotate each result dict with source metadata for scorer
         result_dicts = []
         for h in healthy:
             src_url, src_trust = source_lookup.get(h.config, ("", 1))
             overlap = resolved_overlap_map.get(src_url, 0.0)
-            d = {
+            result_dicts.append({
                 "config":        h.config,
                 "protocol":      h.protocol,
                 "tcp_ok":        h.tcp_ok,
@@ -695,8 +646,7 @@ class V2RayServerFinder:
                 "source_url":    src_url,
                 "source_trust":  src_trust,
                 "overlap_ratio": overlap,
-            }
-            result_dicts.append(d)
+            })
         return result_dicts
 
     # ---------------------------------------------------------------------- #
@@ -713,9 +663,8 @@ class V2RayServerFinder:
     ) -> List[Dict[str, Any]]:
         """Fetch servers and return list of dicts with basic metadata.
 
-        Each dict contains: index, config, protocol, fetched_at.
-        This method does NOT run health checks; use get_servers_with_health
-        followed by scorer.sort_by_quality for a fully scored list.
+        Does NOT run health checks; use get_servers_with_health + scorer.sort_by_quality
+        for a fully scored list.
         """
         import datetime as _dt
 
@@ -749,11 +698,7 @@ class V2RayServerFinder:
         limit: Optional[int] = None,
         use_github_search: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Deprecated alias for get_servers_with_metadata.
-
-        .. deprecated::
-            Use :meth:`get_servers_with_metadata` instead.
-        """
+        """Deprecated alias for get_servers_with_metadata."""
         warnings.warn(
             "get_servers_sorted is deprecated and does not sort. "
             "Use get_servers_with_metadata for plain metadata, or "
@@ -774,12 +719,9 @@ class V2RayServerFinder:
     # ---------------------------------------------------------------------- #
 
     def _build_source_lookup(self) -> Dict[str, Tuple[str, int]]:
-        """Return a dict mapping each known source URL to (url, trust_level).
-
-        Used to annotate health-check results with source metadata for scoring.
-        """
+        """Return a dict mapping each known source URL to (url, trust_level)."""
         sources = get_enabled_sources()
-        return {s.url: (s.url, s.trust) for s in sources}
+        return {s.url: (s.url, s.trust.value) for s in sources}
 
     # ---------------------------------------------------------------------- #
     # Parsing helpers
