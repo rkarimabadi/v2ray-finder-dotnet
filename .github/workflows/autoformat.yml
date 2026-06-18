@@ -1,27 +1,25 @@
 name: Code Quality
 
-# Runs on every push to main/develop.
+# Runs on every push to main/develop, PRs, or manual trigger.
 # Step order:
 #   1. black   -- auto-format (rewrites files in-place)
 #   2. isort   -- auto-sort imports (rewrites files in-place)
-#   3. flake8  -- lint critical errors (hard fail if any E9/F63/F7/F82)
-#   4. flake8  -- full style check (informational, exit-zero)
-#   5. mypy    -- type check (informational, continue-on-error)
-# If black or isort made changes, the job commits them back to the branch
-# using the github-actions bot identity.
-# The badge on README reflects this workflow's last run.
+#   3. Commit fixes (if any) with [skip ci]
+#   4. flake8  -- lint critical errors (hard fail if any E9/F63/F7/F82)
+#   5. flake8  -- full style check (informational, exit-zero)
+#   6. mypy    -- type check (informational, continue-on-error)
 
 on:
   push:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+  workflow_dispatch:  # ← allows manual run from GitHub Actions UI
 
 jobs:
   autoformat-and-lint:
     name: Auto-format & Lint
     runs-on: ubuntu-latest
-    # Allow the job to push commits back to the branch.
     permissions:
       contents: write
 
@@ -29,9 +27,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Fetch the branch ref so we can push back.
           ref: ${{ github.head_ref || github.ref_name }}
-          # Use a token with write access so the push triggers subsequent CI.
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python 3.12
@@ -43,53 +39,33 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install black isort flake8 mypy
-          # Install project so mypy / flake8 can resolve internal imports.
           pip install -e ".[dev]" --quiet
 
-      # ------------------------------------------------------------------ #
-      # 1. black                                                             #
-      # ------------------------------------------------------------------ #
       - name: Auto-format with black
         run: black --target-version py312 src/ tests/
 
-      # ------------------------------------------------------------------ #
-      # 2. isort                                                             #
-      # ------------------------------------------------------------------ #
       - name: Auto-sort imports with isort
         run: isort src/ tests/
 
-      # ------------------------------------------------------------------ #
-      # 3. Commit fixes (if any)                                            #
-      # ------------------------------------------------------------------ #
       - name: Commit formatting fixes
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "style: auto-format (black + isort) [skip ci]"
           commit_author: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
-          # Only commit if src/ or tests/ changed.
           file_pattern: "src/ tests/"
 
-      # ------------------------------------------------------------------ #
-      # 4. flake8 — critical errors (hard fail)                             #
-      # ------------------------------------------------------------------ #
       - name: flake8 critical errors
         run: |
           flake8 src/ tests/ \
             --count --select=E9,F63,F7,F82 \
             --show-source --statistics
 
-      # ------------------------------------------------------------------ #
-      # 5. flake8 — full style (informational)                              #
-      # ------------------------------------------------------------------ #
       - name: flake8 full style
         run: |
           flake8 src/ tests/ \
             --count --exit-zero \
             --max-complexity=10 --statistics
 
-      # ------------------------------------------------------------------ #
-      # 6. mypy (informational)                                             #
-      # ------------------------------------------------------------------ #
       - name: mypy type check
         continue-on-error: true
         run: mypy src/v2ray_finder/ --ignore-missing-imports
