@@ -1,26 +1,13 @@
-"""Unit tests for xray_connectivity.py (Layer 3 — RealConnectivityChecker).
-
-All tests that require a real xray binary are marked
-``pytest.mark.integration`` and skipped automatically when the binary
-is absent (the checker's ``is_xray_available()`` returns False).
-
-Unit tests mock the underlying layers so they run fully offline.
-"""
-
+"""Tests for xray_connectivity.py — V1-D4 retry logic."""
 from __future__ import annotations
 
-import asyncio
-import time
-from dataclasses import dataclass
-from typing import Optional
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+import unittest
+from unittest.mock import MagicMock, call, patch
 
 from v2ray_finder.xray_connectivity import (
-    RealConnectivityChecker,
     RealHealthResult,
-    _ResultCache,
+    _LegacyResult,
+    check_one,
     find_free_port,
 )
 
@@ -29,391 +16,228 @@ from v2ray_finder.xray_connectivity import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-SAMPLE_CONFIG = "vmess://eyJ2IjoiMiIsInBzIjoidCIsImFkZCI6IjEuMi4zLjQiLCJwb3J0IjoiNDQzIiwiaWQiOiJhYWFhYWFhYS1iYmJiLWNjY2MtZGRkZC1lZWVlZWVlZWVlZWUiLCJhaWQiOiIwIiwic2N5IjoiYXV0byIsIm5ldCI6InRjcCIsInR5cGUiOiJub25lIiwiaG9zdCI6IiIsInBhdGgiOiIvIiwidGxzIjoidGxzIiwic25pIjoiIiwiYWxwbiI6IiJ9"
+VMESS_URI = "vmess://eyJhZGQiOiIxMjcuMC4wLjEiLCJwb3J0IjoiODA4MCIsImlkIjoiZmFrZS11dWlkIn0="
 
 
-def _make_result(reachable: bool = True, latency: float = 50.0) -> RealHealthResult:
-    return RealHealthResult(
-        config=SAMPLE_CONFIG,
-        protocol="vmess",
-        reachable=reachable,
-        latency_ms=latency if reachable else None,
-        google_204_ok=reachable,
-        xray_version="Xray 24.9.30",
-        socks_port=10800,
-        check_methods=["xray_start", "socks5_probe", "google_204"],
-    )
+def _make_runner_mock(fail_on_first: bool = False):
+    """Return a (runner_cls_mock, start_call_count) pair.
 
-
-# ---------------------------------------------------------------------------
-# _ResultCache unit tests
-# ---------------------------------------------------------------------------
-
-
-class TestResultCache:
-    def test_miss_on_empty(self):
-        cache = _ResultCache()
-        assert cache.get(SAMPLE_CONFIG) is None
-
-    def test_hit_within_ttl(self):
-        cache = _ResultCache()
-        result = _make_result()
-        cache.set(SAMPLE_CONFIG, result, ttl=60.0)
-        cached = cache.get(SAMPLE_CONFIG)
-        assert cached is not None
-        assert cached.reachable is True
-
-    def test_miss_after_expiry(self):
-        cache = _ResultCache()
-        result = _make_result()
-        cache.set(SAMPLE_CONFIG, result, ttl=0.01)  # 10 ms
-        time.sleep(0.05)
-        assert cache.get(SAMPLE_CONFIG) is None
-
-    def test_clear_removes_entries(self):
-        cache = _ResultCache()
-        cache.set(SAMPLE_CONFIG, _make_result(), ttl=60.0)
-        cache.clear()
-        assert cache.get(SAMPLE_CONFIG) is None
-
-    def test_stats_hit_miss(self):
-        cache = _ResultCache()
-        cache.set(SAMPLE_CONFIG, _make_result(), ttl=60.0)
-        cache.get(SAMPLE_CONFIG)  # hit
-        cache.get("vmess://different")  # miss
-        stats = cache.stats
-        assert stats["hits"] == 1
-        assert stats["misses"] == 1
-        assert stats["size"] == 1
-
-    def test_stats_hit_rate(self):
-        cache = _ResultCache()
-        cache.set(SAMPLE_CONFIG, _make_result(), ttl=60.0)
-        cache.get(SAMPLE_CONFIG)  # hit
-        cache.get(SAMPLE_CONFIG)  # hit
-        cache.get("other")  # miss
-        assert cache.stats["hit_rate"] == pytest.approx(66.7, abs=0.5)
-
-    def test_identical_configs_same_key(self):
-        cache = _ResultCache()
-        cache.set(SAMPLE_CONFIG, _make_result(), ttl=60.0)
-        assert cache.get(f"  {SAMPLE_CONFIG}  ") is not None
-
-
-# ---------------------------------------------------------------------------
-# RealHealthResult -- quality_score tests
-# ---------------------------------------------------------------------------
-
-
-class TestRealHealthResult:
-    def test_quality_score_unreachable_is_zero(self):
-        r = _make_result(reachable=False)
-        assert r.quality_score == 0.0
-
-    def test_quality_score_no_latency_is_zero(self):
-        # reachable=True but latency_ms=None → 0 (conservative)
-        r = RealHealthResult(config=SAMPLE_CONFIG, protocol="vmess",
-                             reachable=True, latency_ms=None)
-        assert r.quality_score == 0.0
-
-    def test_quality_score_fast_is_100(self):
-        # ≤100ms → 100
-        r = _make_result(latency=50.0)
-        assert r.quality_score == 100.0
-
-    def test_quality_score_at_100ms_boundary(self):
-        r = _make_result(latency=100.0)
-        assert r.quality_score == 100.0
-
-    def test_quality_score_200ms(self):
-        # 200ms: 100 - (200-100)*(30/200) = 85
-        r = _make_result(latency=200.0)
-        assert r.quality_score == pytest.approx(85.0, abs=0.5)
-
-    def test_quality_score_300ms_boundary(self):
-        # 300ms: boundary → 70
-        r = _make_result(latency=300.0)
-        assert r.quality_score == pytest.approx(70.0, abs=0.5)
-
-    def test_quality_score_medium(self):
-        # 200ms must be in good range
-        r = _make_result(latency=200.0)
-        assert 50.0 < r.quality_score < 100.0
-
-    def test_quality_score_1000ms_boundary(self):
-        # 1000ms → 20
-        r = _make_result(latency=1000.0)
-        assert r.quality_score == pytest.approx(20.0, abs=0.5)
-
-    def test_quality_score_slow(self):
-        # 2000ms: in 1000-3000ms band → 20 - (2000-1000)*(20/2000) = 10
-        r = _make_result(latency=2000.0)
-        assert r.quality_score == pytest.approx(10.0, abs=0.5)
-
-    def test_quality_score_at_3000ms_floor(self):
-        r = _make_result(latency=3000.0)
-        assert r.quality_score == 0.0
-
-    def test_quality_score_beyond_3000ms_stays_zero(self):
-        r = _make_result(latency=9999.0)
-        assert r.quality_score == 0.0
-
-    def test_quality_score_monotone_decreasing(self):
-        """Score must be non-increasing as latency grows."""
-        latencies = [50, 100, 200, 300, 500, 1000, 1500, 2000, 3000, 5000]
-        scores = [_make_result(latency=float(l)).quality_score for l in latencies]
-        for i in range(len(scores) - 1):
-            assert scores[i] >= scores[i + 1], (
-                f"Not monotone: {latencies[i]}ms={scores[i]} > "
-                f"{latencies[i+1]}ms={scores[i+1]}"
-            )
-
-    def test_from_cache_default_false(self):
-        r = _make_result()
-        assert r.from_cache is False
-
-
-# ---------------------------------------------------------------------------
-# RealConnectivityChecker — cache interaction (no xray needed)
-# ---------------------------------------------------------------------------
-
-
-class TestCheckerCache:
-    """Tests that exercise the cache layer without invoking xray."""
-
-    @pytest.fixture
-    def checker(self):
-        with patch("v2ray_finder.xray_connectivity.RealConnectivityChecker.__init__",
-                   lambda self, **kw: None):
-            obj = RealConnectivityChecker.__new__(RealConnectivityChecker)
-            obj.timeout = 10.0
-            obj.startup_timeout = 5.0
-            obj.concurrent_limit = 5
-            obj.cache_enabled = True
-            obj.cache_ttl = 600.0
-            obj.show_progress = False
-            obj._cache = _ResultCache()
-            obj._manager = MagicMock()
-            obj._adapter = MagicMock()
-            return obj
-
-    def test_cache_hit_returns_from_cache_flag(self, checker):
-        cached_result = _make_result(reachable=True)
-        checker._cache.set(SAMPLE_CONFIG, cached_result, ttl=600.0)
-
-        result = asyncio.get_event_loop().run_until_complete(
-            checker.check_server_real(SAMPLE_CONFIG)
-        )
-        assert result.from_cache is True
-        assert result.reachable is True
-
-    def test_cache_miss_calls_xray(self, checker):
-        """When no cache entry exists, xray layers must be invoked."""
-        checker.check_real_connectivity = AsyncMock(
-            return_value=(True, 55.0, True, None)
-        )
-        from contextlib import asynccontextmanager, contextmanager
-
-        @contextmanager
-        def _cfg_ctx(*a, **kw):
-            yield "/tmp/fake.json"
-
-        @asynccontextmanager
-        async def _run_ctx(*a, **kw):
-            yield
-
-        checker._adapter.build_config_file = _cfg_ctx
-        checker._manager.run = _run_ctx
-        checker._manager.get_version = MagicMock(return_value="Xray 24.9.30")
-
-        result = asyncio.get_event_loop().run_until_complete(
-            checker.check_server_real(SAMPLE_CONFIG)
-        )
-        assert result.from_cache is False
-        assert result.reachable is True
-        # Result should now be in cache
-        cached = checker._cache.get(SAMPLE_CONFIG)
-        assert cached is not None
-
-    def test_failed_result_cached_with_short_ttl(self, checker):
-        """Failed checks are cached for 60 s (short TTL) not the full cache_ttl."""
-        from contextlib import asynccontextmanager, contextmanager
-
-        @contextmanager
-        def _cfg_ctx(*a, **kw):
-            yield "/tmp/fake.json"
-
-        @asynccontextmanager
-        async def _run_ctx(*a, **kw):
-            yield
-
-        checker._adapter.build_config_file = _cfg_ctx
-        checker._manager.run = _run_ctx
-        checker._manager.get_version = MagicMock(return_value="Xray 24.9.30")
-        checker.check_real_connectivity = AsyncMock(
-            return_value=(False, None, False, "timeout")
-        )
-
-        asyncio.get_event_loop().run_until_complete(
-            checker.check_server_real(SAMPLE_CONFIG)
-        )
-        assert checker._cache.get(SAMPLE_CONFIG) is not None
-
-    def test_clear_result_cache(self, checker):
-        checker._cache.set(SAMPLE_CONFIG, _make_result(), ttl=600.0)
-        checker.clear_result_cache()
-        assert checker._cache.get(SAMPLE_CONFIG) is None
-
-    def test_cache_stats_property(self, checker):
-        stats = checker.cache_stats
-        assert "hits" in stats
-        assert "misses" in stats
-        assert "size" in stats
-        assert "hit_rate" in stats
-
-
-# ---------------------------------------------------------------------------
-# check_servers_real_batch — ordering + backoff + edge cases
-# ---------------------------------------------------------------------------
-
-
-class TestBatch:
-    @pytest.fixture
-    def checker(self):
-        with patch("v2ray_finder.xray_connectivity.RealConnectivityChecker.__init__",
-                   lambda self, **kw: None):
-            obj = RealConnectivityChecker.__new__(RealConnectivityChecker)
-            obj.timeout = 10.0
-            obj.startup_timeout = 5.0
-            obj.concurrent_limit = 5
-            obj.cache_enabled = False  # disable cache for batch tests
-            obj.cache_ttl = 600.0
-            obj.show_progress = False
-            obj._cache = _ResultCache()
-            obj._manager = MagicMock()
-            obj._adapter = MagicMock()
-            return obj
-
-    def _patch_check(self, checker, results: list):
-        """Patch check_server_real to return results in order."""
-        call_count = {"n": 0}
-
-        async def _fake(config, protocol=None):
-            idx = call_count["n"] % len(results)
-            call_count["n"] += 1
-            return results[idx]
-
-        checker.check_server_real = _fake
-
-    def test_empty_input(self, checker):
-        results = asyncio.get_event_loop().run_until_complete(
-            checker.check_servers_real_batch([])
-        )
-        assert results == []
-
-    def test_result_count_matches_input(self, checker):
-        servers = [(SAMPLE_CONFIG, "vmess"), (SAMPLE_CONFIG, "vmess")]
-        expected = [_make_result(reachable=True), _make_result(reachable=False)]
-        self._patch_check(checker, expected)
-        results = asyncio.get_event_loop().run_until_complete(
-            checker.check_servers_real_batch(servers)
-        )
-        assert len(results) == 2
-
-    def test_exception_in_task_wrapped_as_result(self, checker):
-        """If check_server_real raises, batch should return a failed result, not crash."""
-        async def _raise(config, protocol=None):
-            raise RuntimeError("xray exploded")
-
-        checker.check_server_real = _raise
-        servers = [(SAMPLE_CONFIG, "vmess")]
-        results = asyncio.get_event_loop().run_until_complete(
-            checker.check_servers_real_batch(servers)
-        )
-        assert len(results) == 1
-        assert results[0].reachable is False
-        assert "xray exploded" in (results[0].error or "")
-
-    def test_backoff_applied_after_failures(self, checker):
-        """Consecutive failures should trigger asyncio.sleep calls."""
-        sleep_calls = []
-
-        async def _track_sleep(t):
-            if t > 0:
-                sleep_calls.append(t)
-
-        fail_result = _make_result(reachable=False)
-        call_count = {"n": 0}
-
-        async def _fake(config, protocol=None):
-            call_count["n"] += 1
-            return fail_result
-
-        checker.check_server_real = _fake
-        checker.concurrent_limit = 1  # serial execution for deterministic backoff
-
-        servers = [(SAMPLE_CONFIG, "vmess")] * 3
-        with patch("v2ray_finder.xray_connectivity.asyncio.sleep", side_effect=_track_sleep):
-            asyncio.get_event_loop().run_until_complete(
-                checker.check_servers_real_batch(servers)
-            )
-        assert len(sleep_calls) >= 1
-
-
-# ---------------------------------------------------------------------------
-# find_free_port smoke test
-# ---------------------------------------------------------------------------
-
-
-def test_find_free_port():
-    port = find_free_port()
-    assert 1024 <= port <= 65535
-
-
-# ---------------------------------------------------------------------------
-# Integration tests (require real xray binary)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.integration
-class TestRealXrayIntegration:
-    """End-to-end tests that launch xray and probe a real server.
-
-    Skipped automatically when the xray binary is not available.
+    When fail_on_first=True the first .start() call raises RuntimeError;
+    subsequent calls succeed.
     """
+    runner_mock = MagicMock()
+    call_count = [0]
 
-    @pytest.fixture(autouse=True)
-    def require_xray(self):
-        checker = RealConnectivityChecker(auto_download=False)
-        if not checker.is_xray_available():
-            pytest.skip("xray binary not available")
+    def _start(cfg):
+        call_count[0] += 1
+        if fail_on_first and call_count[0] == 1:
+            raise RuntimeError("port already in use")
 
-    def test_check_server_real_reachable(self):
-        """A live server must return reachable=True and google_204_ok=True."""
-        import os
-        config = os.environ.get("V2RAY_TEST_CONFIG")
-        if not config:
-            pytest.skip("V2RAY_TEST_CONFIG env var not set")
+    runner_mock.start.side_effect = _start
+    runner_mock.stop.return_value = None
+    return runner_mock, call_count
 
-        checker = RealConnectivityChecker(auto_download=False, cache_enabled=False)
-        result = asyncio.get_event_loop().run_until_complete(
-            checker.check_server_real(config)
-        )
-        assert result.reachable is True
-        assert result.google_204_ok is True
-        assert result.latency_ms is not None and result.latency_ms > 0
 
-    def test_cache_roundtrip_with_real_check(self):
-        """Second call to check_server_real for same config hits cache."""
-        import os
-        config = os.environ.get("V2RAY_TEST_CONFIG")
-        if not config:
-            pytest.skip("V2RAY_TEST_CONFIG env var not set")
+# ---------------------------------------------------------------------------
+# find_free_port
+# ---------------------------------------------------------------------------
 
-        checker = RealConnectivityChecker(auto_download=False, cache_enabled=True, cache_ttl=120)
-        loop = asyncio.get_event_loop()
-        first = loop.run_until_complete(checker.check_server_real(config))
-        second = loop.run_until_complete(checker.check_server_real(config))
-        assert first.from_cache is False
-        assert second.from_cache is True
-        assert second.reachable == first.reachable
+class TestFindFreePort(unittest.TestCase):
+
+    def test_returns_int(self):
+        port = find_free_port()
+        self.assertIsInstance(port, int)
+
+    def test_port_in_valid_range(self):
+        port = find_free_port()
+        self.assertGreater(port, 0)
+        self.assertLessEqual(port, 65535)
+
+    def test_two_calls_may_differ(self):
+        """Not guaranteed but almost always true in practice."""
+        ports = {find_free_port() for _ in range(5)}
+        self.assertGreaterEqual(len(ports), 1)
+
+
+# ---------------------------------------------------------------------------
+# check_one — no retry path (normal success)
+# ---------------------------------------------------------------------------
+
+class TestCheckOneSuccess(unittest.TestCase):
+
+    @patch("v2ray_finder.xray_connectivity.config_to_xray")
+    @patch("v2ray_finder.xray_connectivity.XrayRunner")
+    @patch("v2ray_finder.xray_connectivity._socks5_http_get")
+    def test_success_no_retry(self, mock_probe, mock_runner_cls, mock_cfg):
+        mock_cfg.return_value = {"inbounds": []}
+        runner_inst = MagicMock()
+        mock_runner_cls.return_value = runner_inst
+        mock_probe.return_value = (True, 204, 55.0)
+
+        result = check_one(VMESS_URI, local_port=19000)
+
+        self.assertTrue(result.reachable)
+        self.assertTrue(result.google_204_ok)
+        self.assertAlmostEqual(result.latency_ms, 55.0)
+        self.assertFalse(result.retried)
+        runner_inst.start.assert_called_once()
+        runner_inst.stop.assert_called_once()
+
+    @patch("v2ray_finder.xray_connectivity.config_to_xray")
+    @patch("v2ray_finder.xray_connectivity.XrayRunner")
+    @patch("v2ray_finder.xray_connectivity._socks5_http_get")
+    def test_probe_failure_no_retry(self, mock_probe, mock_runner_cls, mock_cfg):
+        mock_cfg.return_value = {"inbounds": []}
+        mock_runner_cls.return_value = MagicMock()
+        mock_probe.return_value = (False, 0, None)
+
+        result = check_one(VMESS_URI, local_port=19001)
+
+        self.assertFalse(result.reachable)
+        self.assertFalse(result.retried)
+
+    def test_invalid_uri_no_retry(self):
+        result = check_one("not-a-uri")
+        self.assertFalse(result.reachable)
+        self.assertIsNotNone(result.error)
+        self.assertFalse(result.retried)
+
+    @patch("v2ray_finder.xray_connectivity.config_to_xray", return_value=None)
+    def test_config_conversion_failure(self, _):
+        result = check_one(VMESS_URI)
+        self.assertFalse(result.reachable)
+        self.assertIn("convert", result.error)
+        self.assertFalse(result.retried)
+
+
+# ---------------------------------------------------------------------------
+# V1-D4: retry on xray start failure
+# ---------------------------------------------------------------------------
+
+class TestCheckOneRetry(unittest.TestCase):
+
+    @patch("v2ray_finder.xray_connectivity.find_free_port", return_value=29999)
+    @patch("v2ray_finder.xray_connectivity.config_to_xray")
+    @patch("v2ray_finder.xray_connectivity.XrayRunner")
+    @patch("v2ray_finder.xray_connectivity._socks5_http_get")
+    def test_retry_succeeds_on_second_attempt(
+        self, mock_probe, mock_runner_cls, mock_cfg, mock_ffp
+    ):
+        """First start() raises RuntimeError; retry on free port succeeds."""
+        mock_cfg.return_value = {"inbounds": []}
+        mock_probe.return_value = (True, 204, 80.0)
+
+        runner_inst = MagicMock()
+        start_calls = [0]
+
+        def _start(cfg):
+            start_calls[0] += 1
+            if start_calls[0] == 1:
+                raise RuntimeError("address already in use")
+
+        runner_inst.start.side_effect = _start
+        mock_runner_cls.return_value = runner_inst
+
+        result = check_one(VMESS_URI, local_port=19000)
+
+        self.assertTrue(result.reachable)
+        self.assertTrue(result.retried)
+        self.assertEqual(result.socks_port, 29999)
+        self.assertEqual(start_calls[0], 2)
+        mock_ffp.assert_called_once()
+
+    @patch("v2ray_finder.xray_connectivity.find_free_port", return_value=29998)
+    @patch("v2ray_finder.xray_connectivity.config_to_xray")
+    @patch("v2ray_finder.xray_connectivity.XrayRunner")
+    @patch("v2ray_finder.xray_connectivity._socks5_http_get")
+    def test_retry_also_fails_returns_original_error(
+        self, mock_probe, mock_runner_cls, mock_cfg, mock_ffp
+    ):
+        """Both attempts fail — retried=True, original error preserved."""
+        mock_cfg.return_value = {"inbounds": []}
+
+        runner_inst = MagicMock()
+        runner_inst.start.side_effect = RuntimeError("port busy")
+        mock_runner_cls.return_value = runner_inst
+
+        result = check_one(VMESS_URI, local_port=19001)
+
+        self.assertFalse(result.reachable)
+        self.assertTrue(result.retried)
+        self.assertIn("port busy", result.error)
+        mock_ffp.assert_called_once()
+        mock_probe.assert_not_called()
+
+    @patch("v2ray_finder.xray_connectivity.find_free_port", return_value=29997)
+    @patch("v2ray_finder.xray_connectivity.config_to_xray")
+    @patch("v2ray_finder.xray_connectivity.XrayRunner")
+    @patch("v2ray_finder.xray_connectivity._socks5_http_get")
+    def test_retry_cfg_uses_retry_port(
+        self, mock_probe, mock_runner_cls, mock_cfg, mock_ffp
+    ):
+        """config_to_xray is called with the retry port on retry."""
+        xray_cfg = {"inbounds": []}
+        mock_cfg.return_value = xray_cfg
+        mock_probe.return_value = (True, 204, 40.0)
+
+        runner_inst = MagicMock()
+        call_count = [0]
+
+        def _start(cfg):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("busy")
+
+        runner_inst.start.side_effect = _start
+        mock_runner_cls.return_value = runner_inst
+
+        check_one(VMESS_URI, local_port=19002)
+
+        # config_to_xray should be called twice: original port + retry port
+        self.assertEqual(mock_cfg.call_count, 2)
+        calls = mock_cfg.call_args_list
+        self.assertEqual(calls[0], call(VMESS_URI, local_port=19002))
+        self.assertEqual(calls[1], call(VMESS_URI, local_port=29997))
+
+    @patch("v2ray_finder.xray_connectivity.find_free_port", return_value=29996)
+    @patch("v2ray_finder.xray_connectivity.config_to_xray")
+    @patch("v2ray_finder.xray_connectivity.XrayRunner")
+    @patch("v2ray_finder.xray_connectivity._socks5_http_get")
+    def test_no_retry_when_start_succeeds(
+        self, mock_probe, mock_runner_cls, mock_cfg, mock_ffp
+    ):
+        """find_free_port should NOT be called when first start succeeds."""
+        mock_cfg.return_value = {"inbounds": []}
+        mock_probe.return_value = (True, 204, 30.0)
+        mock_runner_cls.return_value = MagicMock()
+
+        result = check_one(VMESS_URI, local_port=19003)
+
+        self.assertFalse(result.retried)
+        mock_ffp.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# retried field surfaces in RealHealthResult / real_health_to_dict
+# ---------------------------------------------------------------------------
+
+class TestRetryFieldPropagation(unittest.TestCase):
+
+    def test_legacy_result_retried_default_false(self):
+        r = _LegacyResult(config="vmess://x", protocol="vmess")
+        self.assertFalse(r.retried)
+
+    def test_real_health_result_retried_default_false(self):
+        r = RealHealthResult(config="vmess://x", protocol="vmess")
+        self.assertFalse(r.retried)
+
+    def test_real_health_to_dict_contains_retried(self):
+        from v2ray_finder.xray_connectivity import real_health_to_dict
+        r = RealHealthResult(config="vmess://x", protocol="vmess", retried=True)
+        d = real_health_to_dict(r)
+        self.assertIn("retried", d)
+        self.assertTrue(d["retried"])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -21,6 +21,13 @@ the same approach used by v2rayA and hiddify-next:
 
 Curve is defined once in :mod:`scoring_curves` and imported here.
 SOCKS5 probe logic lives in :mod:`probes` and is imported here.
+
+Retry policy (V1-D4)
+--------------------
+:func:`check_one` retries **once** with a fresh free port when xray fails to
+start (port contention, flaky binary, etc.).  The retry uses :func:`find_free_port`
+so it never collides with the original port.  Both attempts are logged at
+``DEBUG`` level.  If the retry also fails, the original error is returned.
 """
 
 from __future__ import annotations
@@ -75,6 +82,7 @@ class RealHealthResult:
     xray_version: Optional[str] = None
     socks_port: Optional[int] = None
     check_methods: List[str] = field(default_factory=list)
+    retried: bool = False
 
     @property
     def quality_score(self) -> float:
@@ -198,7 +206,6 @@ class RealConnectivityChecker:
         self._cache = _ResultCache()
         self._port_counter = local_port_base
 
-        # Optional manager/adapter set by tests or subclasses
         self._manager: Any = None
         self._adapter: Any = None
 
@@ -224,7 +231,6 @@ class RealConnectivityChecker:
         """Clear the result cache."""
         self._cache.clear()
 
-    # Backward-compat alias
     def clear_cache(self) -> None:
         self.clear_result_cache()
 
@@ -233,14 +239,7 @@ class RealConnectivityChecker:
     # ------------------------------------------------------------------
 
     def is_xray_available(self) -> bool:
-        """Return True if the xray binary can be located.
-
-        Delegates to XrayRunner.is_available() which calls find_binary(),
-        searching PATH, common install dirs, and the v2ray-finder cache dir.
-        Previously this checked the non-existent public attribute
-        `runner.binary_path` (the real field is `_binary_path`), causing
-        Layer 3 health checks to be silently skipped on every run.
-        """
+        """Return True if the xray binary can be located."""
         try:
             runner = XrayRunner(
                 local_port=10808,
@@ -285,11 +284,10 @@ class RealConnectivityChecker:
         if protocol is None:
             protocol = config.split("://")[0] if "://" in config else "unknown"
 
-        # Cache hit
         if self.cache_enabled:
             cached = self._cache.get(config)
             if cached is not None:
-                result = RealHealthResult(
+                return RealHealthResult(
                     config=cached.config,
                     protocol=cached.protocol,
                     reachable=cached.reachable,
@@ -301,9 +299,8 @@ class RealConnectivityChecker:
                     socks_port=cached.socks_port,
                     check_methods=list(cached.check_methods),
                 )
-                return result
 
-        # Use injected manager/adapter (for tests) or fall back to check_one
+        retried = False
         if self._manager is not None and self._adapter is not None:
             socks_port = find_free_port()
             xray_version: Optional[str] = None
@@ -328,9 +325,10 @@ class RealConnectivityChecker:
                 xray_version=xray_version,
                 socks_port=socks_port,
                 check_methods=["xray_start", "socks5_probe", "google_204"],
+                retried=retried,
             )
         else:
-            # Fallback: run sync check_one in executor
+            # Fallback: run sync check_one in executor (with built-in retry)
             loop = asyncio.get_event_loop()
             port = self._next_port()
             sync_result = await loop.run_in_executor(
@@ -351,11 +349,11 @@ class RealConnectivityChecker:
                 latency_ms=sync_result.latency_ms,
                 error=sync_result.error,
                 from_cache=False,
-                socks_port=port,
+                socks_port=sync_result.socks_port,
                 check_methods=["socks5_probe", "google_204"],
+                retried=sync_result.retried,
             )
 
-        # Cache result (failed results get a short TTL)
         if self.cache_enabled:
             ttl = self.cache_ttl if result.reachable else 60.0
             self._cache.set(config, result, ttl=ttl)
@@ -366,14 +364,7 @@ class RealConnectivityChecker:
         self,
         servers: List[Tuple[str, str]],
     ) -> List[RealHealthResult]:
-        """Async batch check with semaphore-based concurrency control.
-
-        Args:
-            servers: List of (config_uri, protocol) tuples.
-
-        Returns:
-            List of :class:`RealHealthResult`, sorted best-first.
-        """
+        """Async batch check with semaphore-based concurrency control."""
         if not servers:
             return []
 
@@ -404,10 +395,6 @@ class RealConnectivityChecker:
         results = await asyncio.gather(*tasks)
         return list(results)
 
-    # ------------------------------------------------------------------
-    # Sync wrappers (backward compat)
-    # ------------------------------------------------------------------
-
     def check_server_real_sync(self, uri: str, use_cache: bool = True) -> RealHealthResult:
         """Synchronous wrapper around check_server_real."""
         if use_cache and self.cache_enabled:
@@ -429,6 +416,8 @@ class RealConnectivityChecker:
             google_204_ok=result.google_204_ok,
             latency_ms=result.latency_ms,
             error=result.error,
+            socks_port=result.socks_port,
+            retried=result.retried,
         )
         if use_cache and self.cache_enabled:
             ttl = self.cache_ttl if rhr.reachable else 60.0
@@ -449,6 +438,8 @@ class _LegacyResult:
     google_204_ok: bool = False
     latency_ms: Optional[float] = None
     error: Optional[str] = None
+    socks_port: Optional[int] = None
+    retried: bool = False
 
 
 def check_one(
@@ -458,7 +449,16 @@ def check_one(
     binary_path: Optional[str] = None,
     auto_download: bool = True,
 ) -> _LegacyResult:
-    """Spin up xray for *uri*, probe Google 204, return result."""
+    """Spin up xray for *uri*, probe Google 204, return result.
+
+    Retry policy (V1-D4)
+    --------------------
+    If xray fails to start (port contention, flaky binary, etc.), one retry is
+    attempted with a fresh port from :func:`find_free_port`.  Both attempts are
+    logged at DEBUG level.  On retry success ``retried=True`` is set on the
+    returned result.  If the retry also fails, the *original* error is returned
+    with ``retried=True``.
+    """
     if "://" not in uri:
         return _LegacyResult(config=uri, protocol="unknown", error="Not a valid URI")
 
@@ -470,19 +470,51 @@ def check_one(
             error="Could not convert URI to xray config",
         )
 
-    runner = XrayRunner(
-        local_port=local_port,
-        binary_path=binary_path,
-        auto_download=auto_download,
-    )
-    try:
-        runner.start(xray_cfg)
-    except RuntimeError as exc:
-        return _LegacyResult(
-            config=uri, protocol=protocol,
-            error=f"xray start failed: {exc}",
+    def _attempt(port: int, cfg: Any) -> Optional[str]:
+        """Try to start xray on *port*. Returns error string or None on success."""
+        runner = XrayRunner(
+            local_port=port,
+            binary_path=binary_path,
+            auto_download=auto_download,
         )
+        try:
+            runner.start(cfg)
+            return None, runner
+        except RuntimeError as exc:
+            return str(exc), None
 
+    # --- First attempt ---
+    err_msg, runner = _attempt(local_port, xray_cfg)
+    retried = False
+
+    if err_msg is not None:
+        # --- Retry with a fresh free port (V1-D4) ---
+        retry_port = find_free_port()
+        retry_cfg = config_to_xray(uri, local_port=retry_port)
+        if retry_cfg is None:
+            return _LegacyResult(
+                config=uri, protocol=protocol,
+                error=err_msg, retried=True,
+            )
+        logger.debug(
+            "[check_one] xray start failed on port %d (%s); retrying on port %d.",
+            local_port, err_msg, retry_port,
+        )
+        retry_err, runner = _attempt(retry_port, retry_cfg)
+        retried = True
+        if retry_err is not None:
+            logger.debug(
+                "[check_one] Retry on port %d also failed: %s.",
+                retry_port, retry_err,
+            )
+            return _LegacyResult(
+                config=uri, protocol=protocol,
+                error=f"xray start failed: {err_msg} (retry: {retry_err})",
+                retried=True,
+            )
+        local_port = retry_port
+
+    # --- Probe ---
     try:
         ok, status, latency = _socks5_http_get(
             socks_host="127.0.0.1",
@@ -497,6 +529,8 @@ def check_one(
             config=uri, protocol=protocol,
             reachable=ok, google_204_ok=g204,
             latency_ms=latency,
+            socks_port=local_port,
+            retried=retried,
         )
     finally:
         runner.stop()
@@ -534,6 +568,7 @@ def check_real_connectivity_batch(
             config=r.config, protocol=r.protocol,
             reachable=r.reachable, google_204_ok=r.google_204_ok,
             latency_ms=r.latency_ms, error=r.error,
+            socks_port=r.socks_port, retried=r.retried,
         )
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -566,4 +601,5 @@ def real_health_to_dict(r: RealHealthResult) -> Dict:
         "from_cache": r.from_cache,
         "xray_version": r.xray_version,
         "quality_score": r.quality_score,
+        "retried": r.retried,
     }
