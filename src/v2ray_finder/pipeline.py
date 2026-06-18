@@ -24,20 +24,32 @@ Async fetch
 -----------
 All HTTP fetching is delegated to :class:`~async_fetcher.AsyncFetcher`
 which automatically uses aiohttp (preferred), httpx, or falls back to
-sync ``requests`` if neither async library is available (V1-D1).
+sync ``requests`` if neither async library is available.
 Connection pooling and retry/backoff are handled entirely by
 ``AsyncFetcher``.
 
-GitHub rate-limit handling (V1-C3)
------------------------------------
+Stub-ability
+------------
+Tests (and advanced callers) may replace :meth:`_fetch_all_sync` on an
+instance to inject pre-canned results without touching the network::
+
+    p = Pipeline(sources=[src], check_health=False)
+    p._fetch_all_sync = lambda stop, cb: {src.url: ["vmess://..."]}
+    result = p.run()
+
+:meth:`_fetch_all` calls :meth:`_fetch_all_sync` internally so the stub
+is picked up transparently.
+
+GitHub rate-limit handling
+---------------------------
 Sources hosted on ``api.github.com`` or ``raw.githubusercontent.com``
 are detected after fetch via ``FetchResult.status_code``.  When a
 403/429 response is returned, all remaining GitHub-host sources are
 skipped for this run.  Pass ``github_token`` to :class:`Pipeline` to
 attach ``Authorization: token <tok>`` to GitHub requests only.
 
-Memory caps (V1-C4)
---------------------
+Memory caps
+------------
 ``max_configs_per_source`` (default 5 000) truncates each source's
 parsed config list before they are aggregated.  ``max_total_configs``
 (default 50 000) truncates the global list after structural dedup but
@@ -95,7 +107,7 @@ _GITHUB_HOSTS: frozenset = frozenset({
 # Default concurrency cap for async source fetches
 _DEFAULT_FETCH_CONCURRENCY = 10
 
-# Default memory caps (V1-C4)
+# Default memory caps
 _DEFAULT_MAX_CONFIGS_PER_SOURCE: int = 5_000
 _DEFAULT_MAX_TOTAL_CONFIGS: int      = 50_000
 
@@ -257,7 +269,7 @@ class Pipeline:
         # ── Stage 1: Fetch ──────────────────────────────────────────────
         servers_by_source = self._fetch_all(_stop, progress_callback)
 
-        # Apply per-source cap (V1-C4)
+        # Apply per-source cap
         for url in list(servers_by_source.keys()):
             full = servers_by_source[url]
             if len(full) > self.max_configs_per_source:
@@ -277,7 +289,7 @@ class Pipeline:
         # ── Stage 2: Structural dedup ────────────────────────────────────
         configs, overlap_map = deduplicate_across_sources(servers_by_source)
 
-        # Apply global post-dedup cap (V1-C4)
+        # Apply global post-dedup cap
         if self.max_total_configs is not None and len(configs) > self.max_total_configs:
             dropped_global = len(configs) - self.max_total_configs
             configs = configs[: self.max_total_configs]
@@ -319,7 +331,7 @@ class Pipeline:
             return result
 
         # ── Stage 4: Score ─────────────────────────────────────────────
-        self._emit(progress_callback, "score", 0, 1, "Scoring servers…")
+        self._emit(progress_callback, "score", 0, 1, "Scoring servers\u2026")
         result.scores = score_servers(
             result.health_dicts,
             overlap_map=overlap_map,
@@ -336,7 +348,7 @@ class Pipeline:
         return result
 
     # ------------------------------------------------------------------
-    # Source attribution helpers  (V1-C1)
+    # Source attribution helpers
     # ------------------------------------------------------------------
 
     def _build_config_source_map(
@@ -372,7 +384,7 @@ class Pipeline:
         }
 
     # ------------------------------------------------------------------
-    # Stage 1: Fetch  (V1-D1 + V1-C3)
+    # Stage 1: Fetch
     # ------------------------------------------------------------------
 
     def _fetch_all(
@@ -380,12 +392,37 @@ class Pipeline:
         stop_event: threading.Event,
         progress_callback: ProgressCallback,
     ) -> Dict[str, List[str]]:
-        """Fetch all sources, with GitHub rate-limit handling (V1-C3)."""
+        """Delegate to :meth:`_fetch_all_sync`.
+
+        Exists as a separate method so tests can stub either layer::
+
+            # Stub the high-level entry (skips AsyncFetcher entirely)
+            p._fetch_all_sync = lambda stop, cb: {src.url: configs}
+
+            # Or stub the lower level if testing _fetch_all logic
+            p._fetch_all = lambda stop, cb: {src.url: configs}
+        """
+        return self._fetch_all_sync(stop_event, progress_callback)
+
+    def _fetch_all_sync(
+        self,
+        stop_event: threading.Event,
+        progress_callback: ProgressCallback,
+    ) -> Dict[str, List[str]]:
+        """Fetch all sources using :class:`~async_fetcher.AsyncFetcher`.
+
+        Separates GitHub (rate-limit aware) from non-GitHub sources and
+        runs each group through its own :class:`AsyncFetcher` instance
+        with the appropriate auth headers.
+
+        This method is the primary stub point for unit tests — replace it
+        on the instance to inject pre-canned results without network I/O.
+        """
         github_urls     = [s.url for s in self.sources if _is_github_url(s.url)]
         non_github_urls = [s.url for s in self.sources if not _is_github_url(s.url)]
         total           = len(self.sources)
 
-        self._emit(progress_callback, "fetch", 0, total, "Starting fetch…")
+        self._emit(progress_callback, "fetch", 0, total, "Starting fetch\u2026")
 
         base_headers   = {"User-Agent": "v2ray-finder/1.0"}
         github_headers = dict(base_headers)
@@ -408,7 +445,7 @@ class Pipeline:
                 completed += 1
                 self._emit(
                     progress_callback, "fetch", completed, total,
-                    f"Fetched {completed}/{total} sources…",
+                    f"Fetched {completed}/{total} sources\u2026",
                 )
 
         if github_urls and not stop_event.is_set():
@@ -438,7 +475,7 @@ class Pipeline:
                 completed += 1
                 self._emit(
                     progress_callback, "fetch", completed, total,
-                    f"Fetched {completed}/{total} sources…",
+                    f"Fetched {completed}/{total} sources\u2026",
                 )
 
         self._emit(progress_callback, "fetch", total, total, "Fetch complete.")
@@ -455,7 +492,7 @@ class Pipeline:
                 servers_by_source[fr.url] = parsed
                 logger.debug("[pipeline] %s: %d configs.", fr.url, len(parsed))
         else:
-            logger.warning("[pipeline] %s: fetch failed — %s.", fr.url, fr.error)
+            logger.warning("[pipeline] %s: fetch failed \u2014 %s.", fr.url, fr.error)
 
     # ------------------------------------------------------------------
     # Stage 3: Health
@@ -479,7 +516,7 @@ class Pipeline:
             binary_path=self.binary_path,
         )
 
-        total     = len(configs)
+        total      = len(configs)
         all_health: list = []
 
         for batch_start in range(0, total, self.health_batch_size):
@@ -490,7 +527,7 @@ class Pipeline:
                 progress_callback, "health",
                 batch_start, total,
                 f"Health checking "
-                f"{batch_start + 1}–{min(batch_start + self.health_batch_size, total)}…",
+                f"{batch_start + 1}\u2013{min(batch_start + self.health_batch_size, total)}\u2026",
             )
             try:
                 all_health.extend(checker.check_batch(batch))
