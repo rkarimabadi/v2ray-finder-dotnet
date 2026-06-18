@@ -19,8 +19,8 @@ the same approach used by v2rayA and hiddify-next:
     >3000 ms  → 0      (hard floor)
     unreachable/None → 0
 
-This fixes the old formula which had a dead-zone (all latencies ≥2000ms scored
-identically), making server sorting meaningless for slow-but-working servers.
+Curve is defined once in :mod:`scoring_curves` and imported here.
+SOCKS5 probe logic lives in :mod:`probes` and is imported here.
 """
 
 from __future__ import annotations
@@ -28,12 +28,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
-import struct
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from .probes import socks5_http_get as _socks5_http_get
+from .scoring_curves import latency_to_score_100 as _latency_to_score_100
 from .xray_config_adapter import config_to_xray
 from .xray_runner import XrayRunner
 
@@ -42,32 +43,6 @@ logger = logging.getLogger(__name__)
 _GOOGLE_204_HOST = "clients3.google.com"
 _GOOGLE_204_PATH = "/generate_204"
 _GOOGLE_204_PORT = 80
-
-
-# ---------------------------------------------------------------------------
-# Quality scoring helper (module-level so both classes share identical logic)
-# ---------------------------------------------------------------------------
-
-def _latency_to_score(latency_ms: float) -> float:
-    """Map a latency value to a 0-100 quality score.
-
-    Piecewise-linear curve tuned to real-world UX thresholds:
-
-    ≤100 ms   → 100
-    ≤300 ms   → 100 → 70  (excellent → good)
-    ≤1000 ms  → 70  → 20  (good → acceptable)
-    ≤3000 ms  → 20  → 0   (acceptable → floor)
-    >3000 ms  → 0
-    """
-    if latency_ms <= 100.0:
-        return 100.0
-    if latency_ms <= 300.0:
-        return 100.0 - (latency_ms - 100.0) * (30.0 / 200.0)
-    if latency_ms <= 1000.0:
-        return 70.0 - (latency_ms - 300.0) * (50.0 / 700.0)
-    if latency_ms <= 3000.0:
-        return 20.0 - (latency_ms - 1000.0) * (20.0 / 2000.0)
-    return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +80,7 @@ class RealHealthResult:
     def quality_score(self) -> float:
         """Score 0-100 based on reachability and latency.
 
-        Uses a piecewise-linear curve (see module docstring):
+        Uses the canonical piecewise-linear curve from scoring_curves:
           unreachable / no latency  → 0
           ≤100 ms                   → 100
           ≤300 ms                   → 100 → 70
@@ -115,7 +90,7 @@ class RealHealthResult:
         """
         if not self.reachable or self.latency_ms is None:
             return 0.0
-        return round(max(0.0, _latency_to_score(self.latency_ms)), 1)
+        return round(max(0.0, _latency_to_score_100(self.latency_ms)), 1)
 
 
 # ---------------------------------------------------------------------------
@@ -459,78 +434,6 @@ class RealConnectivityChecker:
             ttl = self.cache_ttl if rhr.reachable else 60.0
             self._cache.set(uri, rhr, ttl=ttl)
         return rhr
-
-
-# ---------------------------------------------------------------------------
-# Low-level SOCKS5 probe
-# ---------------------------------------------------------------------------
-
-def _socks5_http_get(
-    socks_host: str,
-    socks_port: int,
-    target_host: str,
-    target_port: int,
-    path: str,
-    timeout: float = 8.0,
-) -> Tuple[bool, int, float]:
-    """Send an HTTP GET through a SOCKS5 proxy without auth.
-
-    Returns (success, http_status_code, latency_ms).
-    """
-    t0 = time.monotonic()
-    try:
-        sock = socket.create_connection((socks_host, socks_port), timeout=timeout)
-        sock.settimeout(timeout)
-
-        sock.sendall(b"\x05\x01\x00")
-        resp = sock.recv(2)
-        if len(resp) < 2 or resp[1] != 0x00:
-            sock.close()
-            return False, 0, (time.monotonic() - t0) * 1000
-
-        host_bytes = target_host.encode()
-        request = (
-            b"\x05\x01\x00\x03"
-            + bytes([len(host_bytes)])
-            + host_bytes
-            + struct.pack(">H", target_port)
-        )
-        sock.sendall(request)
-        conn_resp = sock.recv(10)
-        if len(conn_resp) < 2 or conn_resp[1] != 0x00:
-            sock.close()
-            return False, 0, (time.monotonic() - t0) * 1000
-
-        http_req = (
-            f"GET {path} HTTP/1.1\r\n"
-            f"Host: {target_host}\r\n"
-            "Connection: close\r\n"
-            "User-Agent: v2ray-finder-probe/1.0\r\n"
-            "\r\n"
-        ).encode()
-        sock.sendall(http_req)
-
-        raw = b""
-        while True:
-            chunk = sock.recv(256)
-            if not chunk:
-                break
-            raw += chunk
-            if b"\r\n" in raw:
-                break
-        sock.close()
-
-        latency = (time.monotonic() - t0) * 1000
-        first_line = raw.split(b"\r\n")[0].decode(errors="replace")
-        parts = first_line.split()
-        if len(parts) >= 2:
-            status = int(parts[1])
-            return True, status, latency
-        return False, 0, latency
-
-    except Exception as exc:
-        logger.debug("SOCKS5 probe failed: %s", exc)
-        return False, 0, (time.monotonic() - t0) * 1000
 
 
 # ---------------------------------------------------------------------------
