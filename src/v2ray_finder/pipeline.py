@@ -23,10 +23,18 @@ before every source fetch and every health-check batch.
 Async fetch
 -----------
 When ``httpx`` is installed, :meth:`Pipeline._fetch_all` uses
-``asyncio`` + ``httpx.AsyncClient`` with a shared semaphore capped at
-``fetch_concurrency`` (default 10).  If ``httpx`` is not available the
-pipeline silently falls back to sequential ``requests`` calls so
-existing deployments are not broken.
+``asyncio`` + a single shared ``httpx.AsyncClient`` with connection
+pooling and a semaphore capped at ``fetch_concurrency`` (default 10).
+If ``httpx`` is not available the pipeline falls back to sequential
+``requests`` calls so existing deployments are not broken.
+
+Source attribution
+------------------
+During fetch each config string is mapped to the source URL it came
+from (highest-trust source wins on collision) via
+``_build_config_source_map()``.  In ``_run_health`` every health-result
+dict receives the correct ``source_url``, ``source_trust``, and
+``overlap_ratio`` for that specific config.
 
 Example
 -------
@@ -48,7 +56,7 @@ import logging
 import re
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .normalizer import deduplicate_across_sources
 from .scorer import ServerScore, score_servers, sort_by_quality
@@ -131,7 +139,7 @@ class PipelineResult:
     health_dicts: List[Dict[str, Any]]        = field(default_factory=list)
     scores:       List[ServerScore]           = field(default_factory=list)
     overlap_map:  Dict[str, float]            = field(default_factory=dict)
-    stats:        Dict[str, int]              = field(default_factory=dict)
+    stats:        Dict[str, Any]              = field(default_factory=dict)
 
     @property
     def top_configs(self) -> List[str]:
@@ -188,17 +196,22 @@ class Pipeline:
         limit: Optional[int] = None,
         binary_path: Optional[str] = None,
     ) -> None:
-        self.sources          = sources or get_enabled_sources()
-        self.check_health     = check_health
-        self.check_http_probe = check_http_probe
-        self.check_google_204 = check_google_204
-        self.timeout          = timeout
+        self.sources           = sources or get_enabled_sources()
+        self.check_health      = check_health
+        self.check_http_probe  = check_http_probe
+        self.check_google_204  = check_google_204
+        self.timeout           = timeout
         self.min_quality_score = min_quality_score
         self.health_batch_size = health_batch_size
-        self.fetch_timeout    = fetch_timeout
+        self.fetch_timeout     = fetch_timeout
         self.fetch_concurrency = fetch_concurrency
-        self.limit            = limit
-        self.binary_path      = binary_path
+        self.limit             = limit
+        self.binary_path       = binary_path
+
+        # Pre-build source-URL → trust-level lookup (avoids repeated iteration).
+        self._source_trust_map: Dict[str, int] = {
+            s.url: s.trust.value for s in self.sources
+        }
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -223,7 +236,7 @@ class Pipeline:
         """
         _stop = stop_event or threading.Event()  # no-op event if not provided
         result = PipelineResult()
-        stats: Dict[str, int] = {"fetched": 0, "deduped": 0, "healthy": 0, "scored": 0}
+        stats: Dict[str, Any] = {"fetched": 0, "deduped": 0, "healthy": 0, "scored": 0}
 
         # ── Stage 1: Fetch (async when httpx available) ─────────────────────
         servers_by_source = self._fetch_all(_stop, progress_callback)
@@ -232,7 +245,7 @@ class Pipeline:
             result.stats = stats
             return result
 
-        # ── Stage 2: Structural dedup ───────────────────────────────────────
+        # ── Stage 2: Structural dedup ────────────────────────────────────
         configs, overlap_map = deduplicate_across_sources(servers_by_source)
         if self.limit:
             configs = configs[: self.limit]
@@ -247,21 +260,25 @@ class Pipeline:
             result.stats = stats
             return result
 
-        # ── Stage 3: Health checks ──────────────────────────────────────────
+        # Build per-config source attribution map (V1-C1)
+        config_source_map = self._build_config_source_map(servers_by_source)
+
+        # ── Stage 3: Health checks ──────────────────────────────────────
         if not self.check_health:
             result.health_dicts = [
-                {"config": c, "health_checked": False} for c in configs
+                self._make_unchecked_dict(c, config_source_map, overlap_map)
+                for c in configs
             ]
         else:
             result.health_dicts = self._run_health(
-                configs, overlap_map, _stop, progress_callback
+                configs, config_source_map, overlap_map, _stop, progress_callback
             )
         stats["healthy"] = len(result.health_dicts)
         if _stop.is_set():
             result.stats = stats
             return result
 
-        # ── Stage 4: Score ──────────────────────────────────────────────────
+        # ── Stage 4: Score ─────────────────────────────────────────────
         self._emit(progress_callback, "score", 0, 1, "Scoring servers…")
         result.scores = score_servers(
             result.health_dicts,
@@ -277,6 +294,50 @@ class Pipeline:
 
         result.stats = stats
         return result
+
+    # ------------------------------------------------------------------
+    # Source attribution helpers  (V1-C1)
+    # ------------------------------------------------------------------
+
+    def _build_config_source_map(
+        self,
+        servers_by_source: Dict[str, List[str]],
+    ) -> Dict[str, str]:
+        """Return a mapping from config string → source URL.
+
+        When the same config appears in multiple sources, the source with
+        the highest trust level wins; ties are broken by iteration order
+        (first source wins).
+        """
+        config_source: Dict[str, str] = {}
+        # Process sources in ascending trust order so that higher-trust
+        # sources overwrite lower-trust ones.
+        sorted_sources = sorted(
+            servers_by_source.keys(),
+            key=lambda url: self._source_trust_map.get(url, 1),
+            reverse=False,  # low trust first → high trust overwrites
+        )
+        for url in sorted_sources:
+            for cfg in servers_by_source[url]:
+                config_source[cfg] = url
+        return config_source
+
+    def _make_unchecked_dict(
+        self,
+        config: str,
+        config_source_map: Dict[str, str],
+        overlap_map: Dict[str, float],
+    ) -> Dict[str, Any]:
+        """Build a minimal health dict for a config that was not health-checked."""
+        src_url   = config_source_map.get(config, "")
+        src_trust = self._source_trust_map.get(src_url, 1)
+        return {
+            "config":         config,
+            "health_checked": False,
+            "source_url":     src_url,
+            "source_trust":   src_trust,
+            "overlap_ratio":  overlap_map.get(src_url, 0.0),
+        }
 
     # ------------------------------------------------------------------
     # Stage 1: Fetch
@@ -304,12 +365,12 @@ class Pipeline:
         stop_event: threading.Event,
         progress_callback: ProgressCallback,
     ) -> Dict[str, List[str]]:
-        """Fetch all sources concurrently using httpx + asyncio.
+        """Fetch all sources concurrently using a single shared httpx.AsyncClient.
 
-        A shared semaphore limits simultaneous connections to
-        ``self.fetch_concurrency`` so we don’t flood the network.
-        Stop-event is checked before dispatching each task and after
-        every completed fetch.
+        A single client is created for the entire fetch phase so that TLS
+        sessions and TCP connections are pooled across all source requests
+        (V1-C2).  A semaphore limits simultaneous in-flight requests to
+        ``self.fetch_concurrency``.
         """
         import httpx
 
@@ -320,73 +381,79 @@ class Pipeline:
 
         self._emit(progress_callback, "fetch", 0, total, "Starting async fetch…")
 
-        async def _fetch_one(source: SourceEntry) -> tuple[str, List[str]]:
-            """Fetch a single source; return (url, configs)."""
-            async with semaphore:
-                if stop_event.is_set():
-                    return source.url, []
-                for attempt in range(2):  # 1 retry on transient error
-                    try:
-                        async with httpx.AsyncClient(
-                            timeout=self.fetch_timeout,
-                            follow_redirects=True,
-                            headers={"User-Agent": "v2ray-finder/1.0"},
-                        ) as client:
+        # V1-C2: ONE shared client for all source fetches (connection pooling).
+        limits = httpx.Limits(
+            max_connections=self.fetch_concurrency,
+            max_keepalive_connections=self.fetch_concurrency,
+        )
+        async with httpx.AsyncClient(
+            timeout=self.fetch_timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "v2ray-finder/1.0"},
+            limits=limits,
+        ) as client:
+
+            async def _fetch_one(source: SourceEntry) -> Tuple[str, List[str]]:
+                """Fetch a single source using the shared client."""
+                async with semaphore:
+                    if stop_event.is_set():
+                        return source.url, []
+                    for attempt in range(2):  # 1 retry on transient error
+                        try:
                             resp = await client.get(source.url)
-                        if resp.status_code == 200:
-                            configs = _parse_configs(resp.text)
-                            logger.debug(
-                                "[pipeline] %s: %d configs (async).",
-                                source.label, len(configs),
-                            )
-                            return source.url, configs
-                        else:
-                            logger.warning(
-                                "[pipeline] %s: HTTP %d.",
-                                source.label, resp.status_code,
-                            )
-                            return source.url, []
-                    except Exception as exc:
-                        if attempt == 0:
-                            logger.debug(
-                                "[pipeline] %s: transient error (%s), retrying.",
-                                source.label, exc,
-                            )
-                            await asyncio.sleep(0.5)
-                        else:
-                            logger.warning(
-                                "[pipeline] %s: fetch failed — %s.",
-                                source.label, exc,
-                            )
-                            return source.url, []
-            return source.url, []  # unreachable but satisfies type checker
+                            if resp.status_code == 200:
+                                configs = _parse_configs(resp.text)
+                                logger.debug(
+                                    "[pipeline] %s: %d configs (async).",
+                                    source.label, len(configs),
+                                )
+                                return source.url, configs
+                            else:
+                                logger.warning(
+                                    "[pipeline] %s: HTTP %d.",
+                                    source.label, resp.status_code,
+                                )
+                                return source.url, []
+                        except Exception as exc:
+                            if attempt == 0:
+                                logger.debug(
+                                    "[pipeline] %s: transient error (%s), retrying.",
+                                    source.label, exc,
+                                )
+                                await asyncio.sleep(0.5)
+                            else:
+                                logger.warning(
+                                    "[pipeline] %s: fetch failed — %s.",
+                                    source.label, exc,
+                                )
+                                return source.url, []
+                    return source.url, []
 
-        # Create all tasks up-front; cancel remaining on stop.
-        tasks = [
-            asyncio.create_task(_fetch_one(src))
-            for src in self.sources
-            if not stop_event.is_set()
-        ]
+            tasks = [
+                asyncio.create_task(_fetch_one(src))
+                for src in self.sources
+                if not stop_event.is_set()
+            ]
 
-        for coro in asyncio.as_completed(tasks):
-            if stop_event.is_set():
-                for t in tasks:
-                    t.cancel()
-                break
-            try:
-                url, configs = await coro
-                if configs:
-                    results[url] = configs
-            except asyncio.CancelledError:
-                pass
-            except Exception as exc:
-                logger.warning("[pipeline] Unexpected async fetch error: %s", exc)
-            finally:
-                completed += 1
-                self._emit(
-                    progress_callback, "fetch", completed, total,
-                    f"Fetched {completed}/{total} sources…",
-                )
+            for coro in asyncio.as_completed(tasks):
+                if stop_event.is_set():
+                    for t in tasks:
+                        t.cancel()
+                    break
+                try:
+                    url, configs = await coro
+                    if configs:
+                        results[url] = configs
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:
+                    logger.warning("[pipeline] Unexpected async fetch error: %s", exc)
+                finally:
+                    completed += 1
+                    self._emit(
+                        progress_callback, "fetch", completed, total,
+                        f"Fetched {completed}/{total} sources…",
+                    )
 
         self._emit(progress_callback, "fetch", total, total, "Fetch complete.")
         return results
@@ -441,17 +508,17 @@ class Pipeline:
     def _run_health(
         self,
         configs: List[str],
+        config_source_map: Dict[str, str],
         overlap_map: Dict[str, float],
         stop_event: threading.Event,
         progress_callback: ProgressCallback,
     ) -> List[Dict[str, Any]]:
-        """Run health checks on *configs* and return annotated result dicts."""
-        from .health_checker import HealthChecker, filter_healthy_servers
-        from .sources import get_enabled_sources
+        """Run health checks on *configs* and return annotated result dicts.
 
-        source_trust_map: Dict[str, int] = {
-            s.url: s.trust.value for s in get_enabled_sources()
-        }
+        Each result dict carries the correct ``source_url``, ``source_trust``,
+        and ``overlap_ratio`` for the specific config (V1-C1).
+        """
+        from .health_checker import HealthChecker, filter_healthy_servers
 
         checker = HealthChecker(
             timeout=self.timeout,
@@ -487,16 +554,9 @@ class Pipeline:
 
         result_dicts: List[Dict[str, Any]] = []
         for h in healthy:
-            # Best-effort source attribution: pick first source URL that
-            # exists in overlap_map and in the trust map.
-            src_url   = ""
-            src_trust = 1
-            for url in overlap_map:
-                if url in source_trust_map:
-                    src_url   = url
-                    src_trust = source_trust_map[url]
-                    break
-
+            # V1-C1: per-config source attribution (not first-source-wins globally)
+            src_url   = config_source_map.get(h.config, "")
+            src_trust = self._source_trust_map.get(src_url, 1)
             result_dicts.append({
                 "config":         h.config,
                 "protocol":       h.protocol,
