@@ -179,9 +179,7 @@ class TestHealthPreStop:
 
         servers = ["vmess://s1", "ss://s2"]
         # get_all_servers now returns (configs, overlap_map) tuple
-        with patch.object(
-            finder, "get_all_servers", return_value=(servers, {})
-        ):
+        with patch.object(finder, "get_all_servers", return_value=(servers, {})):
             result = finder.get_servers_with_health(check_health=True)
 
         assert len(result) == 2
@@ -190,9 +188,7 @@ class TestHealthPreStop:
     def test_no_health_check_returns_unchecked_servers(self):
         finder = _finder()
         servers = ["trojan://t1", "vless://v1"]
-        with patch.object(
-            finder, "get_all_servers", return_value=(servers, {})
-        ):
+        with patch.object(finder, "get_all_servers", return_value=(servers, {})):
             result = finder.get_servers_with_health(check_health=False)
 
         assert len(result) == 2
@@ -245,9 +241,7 @@ class TestHealthBatchStop:
 
         with ExitStack() as stack:
             stack.enter_context(
-                patch.object(
-                    finder, "get_all_servers", return_value=(servers, {})
-                )
+                patch.object(finder, "get_all_servers", return_value=(servers, {}))
             )
             stack.enter_context(
                 patch(
@@ -282,9 +276,7 @@ class TestHealthBatchStop:
 
         with ExitStack() as stack:
             stack.enter_context(
-                patch.object(
-                    finder, "get_all_servers", return_value=(servers, {})
-                )
+                patch.object(finder, "get_all_servers", return_value=(servers, {}))
             )
             stack.enter_context(
                 patch(
@@ -321,9 +313,7 @@ class TestHealthBatchStop:
 
         with ExitStack() as stack:
             stack.enter_context(
-                patch.object(
-                    finder, "get_all_servers", return_value=(servers, {})
-                )
+                patch.object(finder, "get_all_servers", return_value=(servers, {}))
             )
             stack.enter_context(
                 patch(
@@ -360,9 +350,7 @@ class TestHealthBatchStop:
 
         with ExitStack() as stack:
             stack.enter_context(
-                patch.object(
-                    finder, "get_all_servers", return_value=(servers, {})
-                )
+                patch.object(finder, "get_all_servers", return_value=(servers, {}))
             )
             stack.enter_context(
                 patch(
@@ -547,9 +535,9 @@ class TestMainNonInteractivePipeline:
                             try:
                                 cli.main()
                             except SystemExit as exc:
-                                assert exc.code == 0, (
-                                    f"Expected exit 0 or no exit, got {exc.code}"
-                                )
+                                assert (
+                                    exc.code == 0
+                                ), f"Expected exit 0 or no exit, got {exc.code}"
 
     def test_saves_partial_when_stopped(self, tmp_path):
         from v2ray_finder import cli

@@ -605,9 +605,7 @@ class XrayBinaryManager(XrayRunner):
                     try:
                         import asyncio as _asyncio
 
-                        await _asyncio.wait_for(
-                            ctx_self._proc.wait(), timeout=3.0
-                        )
+                        await _asyncio.wait_for(ctx_self._proc.wait(), timeout=3.0)
                     except Exception:
                         ctx_self._proc.kill()
                         await ctx_self._proc.wait()

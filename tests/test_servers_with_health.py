@@ -89,9 +89,7 @@ def test_get_servers_with_health_import_error_falls_back_gracefully(finder):
     """When health_checker cannot be imported the method must fall back to
     returning servers with health_checked=False, not raise.
     """
-    with patch.object(
-        finder, "get_all_servers", return_value=(["vmess://s1"], {})
-    ):
+    with patch.object(finder, "get_all_servers", return_value=(["vmess://s1"], {})):
         with patch.dict(sys.modules, {"v2ray_finder.health_checker": None}):
             result = finder.get_servers_with_health(check_health=True)
 
@@ -111,9 +109,7 @@ def test_get_servers_with_health_full_flow_returns_formatted_results(finder):
     hc_mod = _make_hc_module([mock_health])
 
     with (
-        patch.object(
-            finder, "get_all_servers", return_value=(["vmess://test"], {})
-        ),
+        patch.object(finder, "get_all_servers", return_value=(["vmess://test"], {})),
         patch.dict(sys.modules, {"v2ray_finder.health_checker": hc_mod}),
     ):
         result = finder.get_servers_with_health(check_health=True)
@@ -133,9 +129,7 @@ def test_get_servers_with_health_filter_unhealthy_calls_filter(finder):
     hc_mod = _make_hc_module([mock_health])
 
     with (
-        patch.object(
-            finder, "get_all_servers", return_value=(["vmess://test"], {})
-        ),
+        patch.object(finder, "get_all_servers", return_value=(["vmess://test"], {})),
         patch.dict(sys.modules, {"v2ray_finder.health_checker": hc_mod}),
     ):
         finder.get_servers_with_health(check_health=True, filter_unhealthy=True)
@@ -149,9 +143,7 @@ def test_get_servers_with_health_min_quality_calls_filter(finder):
     hc_mod = _make_hc_module([mock_health])
 
     with (
-        patch.object(
-            finder, "get_all_servers", return_value=(["vmess://test"], {})
-        ),
+        patch.object(finder, "get_all_servers", return_value=(["vmess://test"], {})),
         patch.dict(sys.modules, {"v2ray_finder.health_checker": hc_mod}),
     ):
         finder.get_servers_with_health(check_health=True, min_quality_score=50.0)
