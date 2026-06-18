@@ -19,59 +19,60 @@
 
 ---
 
-## 🚀 تازه‌های نسخه 0.2.1
+## 🚀 تازه‌های نسخه 0.6.0 — Pipeline Orchestrator
 
-### 🐛 Ctrl+C و توقف صحیح — بازنویسی کامل
+🏗️ **کلاس `Pipeline`** — یک entry point برای کل زنجیره کشف → fetch → dedup → health → score  
+⚡ **fetch همزمان async** — `asyncio` + `httpx` با semaphore (تا ۱۰ برابر سریع‌تر برای ۳۰+ منبع)  
+🔒 **`StopController`** — لغو ایمن در برابر thread با `threading.Event` برای GUI/CLI  
+📦 **`PipelineResult`** — خروجی یکپارچه با `configs`، `scores`، `stats`، `top_configs`  
+↩️ **fallback سینک** — اگه `httpx` نصب نباشه، خودکار به `requests` برمی‌گرده  
+🧪 **۴۰ تست جدید** در `test_pipeline.py` برای همه مراحل و edge caseها  
 
-⌨️ **Ctrl+C همه‌جا کار می‌کنه** — تمام لایه‌های fetch از KeyboardInterrupt حمایت کرده و نتایج جزئی رو ذخیره می‌کنن  
-🔒 **StopController ایمن در برابر thread** — `threading.Event` جایگزین boolean ساده شد  
-🏥 **health check دسته‌ای** — پارامتر `health_batch_size`، بررسی stop بین هر دسته  
-🧪 **پوشش تست کامل** برای مکانیزم stop در CLI، Rich CLI و core  
-🔧 **سازگاری با Python 3.8** — `ExitStack` جایگزین `with (...)` شد  
-📦 **ساخت EXE برای Windows** — `cli_entry.py` و `cli_rich_entry.py` برای PyInstaller اضافه شدن  
+```python
+from v2ray_finder import Pipeline, StopController
+
+stop = StopController()
+pipeline = Pipeline(check_health=True, check_google_204=False)
+result = pipeline.run(stop_event=stop.event)
+
+print(f"دریافت شده: {result.stats['fetched']}، یکتا: {result.stats['deduped']}")
+for score in result.scores[:5]:
+    print(score.grade, score.config[:80])
+```
 
 > جزئیات کامل در [📋 CHANGELOG.md](CHANGELOG.md)
-
----
-
-## 🚀 نسخه 0.2.0 — کارایی و پایداری بالا
-
-⚡ **دریافت ناهمزمان HTTP** — ۱۰-۵۰ برابر سریع‌تر  
-💾 **کش هوشمند** — ۸۰-۹۵٪ کمتر API call  
-🛡️ **مدیریت خطای پیشرفته** — نوع Result + سلسله‌مراتب exception  
-🔒 **مدیریت امن Token** — پشتیبانی از متغیر محیطی + `from_env()`  
-🧪 **پوشش تست ۷۸٪** — تست روی Python 3.8–3.12  
-📈 **ردیابی Rate Limit** — نظارت بر GitHub API  
-🏥 **بررسی سلامت** — TCP، تأخیر و امتیازدهی کیفیت  
-⌨️ **دریافت تعاملی Token** — ورودی امن با `--prompt-token`  
-⛔ **وقفه صحیح** — Ctrl+C نتایج جزئی رو ذخیره می‌کنه  
 
 ---
 
 ## 🎯 ویژگی‌ها
 
 ### ویژگی‌های اصلی
-- 🔍 جستجوی مخازن GitHub + منابع انتخاب‌شده
+- 🔍 جستجوی مخازن GitHub + ۳۲ منبع subscription انتخاب‌شده
 - 🚀 سه رابط: Python API، CLI (ساده و غنی)، GUI (PySide6)
-- 📦 خروجی بدون تکرار و تمیز
-- 🌐 پشتیبانی از: vmess، vless، trojan، shadowsocks، ssr
+- 🏗️ **Pipeline orchestrator** — یک‌خطی کل pipeline با پشتیبانی از لغو
+- 📦 deduplication ساختاری با SHA-256
+- 🌐 پشتیبانی از vmess، vless، trojan، shadowsocks، ssr
 - 💾 خروجی به فایل متنی
 - 📊 آمار بر اساس پروتکل
 
-### کارایی و قابلیت اطمینان
-- ⚡ Async HTTP: ۱۰-۵۰ برابر سریع‌تر
+### کارایی
+- ⚡ fetch async: تا ۱۰ برابر سریع‌تر با `httpx` + `asyncio` و semaphore
 - 💾 کش هوشمند: ۸۰-۹۵٪ کمتر API call
-- ✅ بررسی سلامت: TCP، تأخیر، اعتبارسنجی کانفیگ
-- 🎯 امتیازدهی کیفیت: ۰–۱۰۰
-- 🔄 Retry: تلاش مجدد با back-off نمایی
-- ⛔ توقف صحیح: Ctrl+C نتایج جزئی رو ذخیره می‌کنه
+- 🎯 امتیازدهی ۷ بُعدی: latency، reachability، protocol، trust، freshness، uniqueness، Google 204
+- 🔄 Retry با exponential backoff
+- ⛔ توقف صحیح: Ctrl+C یا `StopController.stop()`
+
+### بررسی سلامت
+- 🔌 **لایه ۱** — TCP + تأخیر
+- 🌐 **لایه ۲** — HTTP probe مستقیم
+- 🔒 **لایه ۳** — xray SOCKS5 + Google 204
+- 📊 پردازش دسته‌ای با stop-event checkpoint
 
 ### تجربه توسعه‌دهنده
-- 🛡️ نوع `Result[T, E]` برای مدیریت صریح خطا
-- 📈 `get_rate_limit_info()` برای نظارت
-- 🔒 اعتبارسنجی و پاکسازی Token
-- ⌨️ دریافت تعاملی Token با ورودی پنهان
-- 🧪 پوشش تست ۷۸٪ روی Linux، macOS و Windows
+- 🛡️ نوع `Result[T, E]`
+- 📈 `get_rate_limit_info()`
+- 🔒 اعتبارسنجی Token
+- 🧪 پوشش تست ~۸۵٪
 - ✅ CI/CD خودکار
 
 ---
@@ -80,7 +81,7 @@
 
 - Python ≥ 3.8
 - اتصال به اینترنت
-- اختیاری: aiohttp/httpx، diskcache، PySide6
+- اختیاری: `httpx` (fetch async)، `aiohttp`، `diskcache`، `PySide6`
 
 ---
 
@@ -88,8 +89,8 @@
 
 ```bash
 pip install v2ray-finder
-pip install "v2ray-finder[async]"     # ۱۰-۵۰ برابر سریع‌تر!
-pip install "v2ray-finder[cache]"     # ۸۰-۹۵٪ کمتر API call!
+pip install "v2ray-finder[async]"     # fetch سریع!
+pip install "v2ray-finder[cache]"     # کمتر API call
 pip install "v2ray-finder[gui]"       # رابط گرافیکی
 pip install "v2ray-finder[cli-rich]"  # CLI غنی
 pip install "v2ray-finder[all]"       # همه چیز (پیشنهادی)
@@ -105,66 +106,63 @@ pip install -e ".[all,dev]"
 
 ---
 
-## 🔒 امنیت Token
+## 📚 استفاده به‌صورت کتابخانه
 
-**مهم:** Token رو هیچ‌وقت مستقیم توی کد یا CLI نفرست.
-
-```bash
-export GITHUB_TOKEN="ghp_your_token_here"
-```
+### Pipeline — روش پیشنهادی (v0.6.0+)
 
 ```python
-from v2ray_finder import V2RayServerFinder
+from v2ray_finder import Pipeline, StopController, PipelineResult
 
-finder = V2RayServerFinder()          # خودکار از GITHUB_TOKEN می‌خونه
-finder = V2RayServerFinder.from_env() # صریح
+pipeline = Pipeline(
+    check_health=True,
+    fetch_concurrency=10,
+    limit=500,
+)
+result: PipelineResult = pipeline.run()
+
+print(f"{result.stats['fetched']} دریافت → {result.stats['deduped']} یکتا")
+for s in result.scores[:10]:
+    print(f"{s.grade}  {s.total:.4f}  {s.config[:80]}")
 ```
 
-**محدودیت rate:** بدون token: ۶۰/ساعت — با token: ۵۰۰۰/ساعت
+**با لغو (GUI / worker thread):**
 
-میتوانید توکن رو از داخل GitHub Settings → Developer settings → Personal access tokens با اسکوپ public_repo بسازید.
+```python
+import threading
+from v2ray_finder import Pipeline, StopController
 
+stop = StopController()
 
----
+def worker():
+    result = Pipeline(check_health=True).run(stop_event=stop.event)
+    print(f"امتیازدهی شده: {result.stats['scored']}")
 
-## 📚 استفاده به‌صورت کتابخانه
+t = threading.Thread(target=worker)
+t.start()
+stop.stop()   # از دکمه GUI
+t.join()
+```
+
+**با progress callback:**
+
+```python
+def on_progress(stage, current, total, message):
+    print(f"[{stage}] {current}/{total} — {message}")
+
+result = Pipeline(check_health=True).run(progress_callback=on_progress)
+```
+
+### API کلاسیک
 
 ```python
 from v2ray_finder import V2RayServerFinder
 
 finder = V2RayServerFinder()
-
 servers = finder.get_all_servers()
 print(f"تعداد سرورها: {len(servers)}")
 
-servers = finder.get_all_servers(use_github_search=True)
-
-count, filename = finder.save_to_file(
-    filename="v2ray_servers.txt",
-    limit=200,
-    use_github_search=True,
-)
+count, filename = finder.save_to_file(filename="v2ray_servers.txt", limit=200)
 print(f"{count} سرور در {filename} ذخیره شد")
-```
-
-### مدیریت خطا 🛡️
-
-```python
-from v2ray_finder import V2RayServerFinder, RateLimitError, NetworkError
-
-# روش ۱: Result type
-result = finder.search_repos(keywords=["v2ray"])
-if result.is_ok():
-    repos = result.unwrap()
-else:
-    print(result.error)
-
-# روش ۲: حالت Exception
-finder = V2RayServerFinder(raise_errors=True)
-try:
-    repos = finder.search_repos_or_empty()
-except RateLimitError as e:
-    print(f"محدودیت: {e}")
 ```
 
 ### بررسی سلامت 🏥
@@ -192,6 +190,7 @@ v2ray-finder -o servers.txt            # ذخیره سریع
 v2ray-finder -s -l 200 -o servers.txt  # جستجوی GitHub + محدودیت
 v2ray-finder --stats-only              # فقط آمار
 v2ray-finder --prompt-token -s         # دریافت امن Token
+v2ray-finder -c --min-quality 60       # با health check
 ```
 
 ```bash
@@ -211,12 +210,33 @@ v2ray-finder-gui
 
 ---
 
+## 🔒 امنیت Token
+
+```bash
+export GITHUB_TOKEN="ghp_your_token_here"
+```
+
+**محدودیت rate:** بدون token: ۶۰/ساعت — با token: ۵۰۰۰/ساعت
+
+---
+
 ## 🤝 مشارکت
 
 ```bash
 pytest tests/ -v
 black . && isort . && flake8 src/
 ```
+
+---
+
+## 🧪 تست‌ها
+
+```bash
+pip install -e ".[dev]"
+pytest tests/ --cov=v2ray_finder --cov-report=html
+```
+
+**پوشش تست فعلی: ~۸۵٪** روی Python 3.8–3.12، Linux، macOS و Windows.
 
 ---
 

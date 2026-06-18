@@ -19,58 +19,63 @@ The goal is to give you a clean, deduplicated list of `vmess://`, `vless://`, `t
 
 ---
 
-## 🚀 What's New in v0.2.1
+## 🚀 What's New in v0.6.0 — Pipeline Orchestrator
 
-### 🐛 Ctrl+C & Graceful Stop — Complete Overhaul
+🏗️ **`Pipeline` class** — single entry point for the full discovery → fetch → dedup → health → score chain  
+⚡ **Async concurrent fetch** — `asyncio` + `httpx` with semaphore (10× faster for 30+ sources)  
+🔒 **`StopController`** — thread-safe cancellation via `threading.Event` for GUI/CLI  
+📦 **`PipelineResult`** — unified output with `configs`, `scores`, `stats`, `top_configs`  
+↩️ **Sync fallback** — automatic fallback to `requests` when `httpx` is not installed  
+🧪 **40 new test cases** in `test_pipeline.py` covering all stages and edge cases  
 
-⌨️ **Ctrl+C now works everywhere** — all fetch layers catch KeyboardInterrupt and save partial results  
-🔒 **Thread-safe StopController** — `threading.Event` replaces bare boolean flag  
-🏥 **Batch health checking** — `health_batch_size` param, stop checked between every batch  
-🧪 **Full test coverage** for stop mechanism across CLI, Rich CLI, and core  
-🔧 **Python 3.8 compat fixes** — `ExitStack` replaces parenthesized `with` syntax  
-📦 **Windows EXE builds** — `cli_entry.py` and `cli_rich_entry.py` added for PyInstaller  
+```python
+from v2ray_finder import Pipeline, StopController
+
+stop = StopController()
+pipeline = Pipeline(check_health=True, check_google_204=False)
+result = pipeline.run(stop_event=stop.event)
+
+print(f"Fetched: {result.stats['fetched']}, Unique: {result.stats['deduped']}")
+for score in result.scores[:5]:
+    print(score.grade, score.config[:80])
+```
 
 > See full details in [📋 CHANGELOG.md](CHANGELOG.md)
-
----
-
-## 🚀 v0.2.0 — Major Performance & Reliability Release
-
-⚡ **Async HTTP Fetching** — 10-50x faster concurrent downloads  
-💾 **Smart Caching** — 80-95% fewer GitHub API calls  
-🛡️ **Enhanced Error Handling** — Result type + custom exception hierarchy  
-🔒 **Secure Token Handling** — Environment variable support + `from_env()`  
-🧪 **78% Test Coverage** — Comprehensive test suite across Python 3.8–3.12  
-📈 **Rate Limit Tracking** — Monitor GitHub API usage  
-🏥 **Health Checking** — TCP connectivity, latency measurement, quality scoring  
-⌨️ **Interactive Token Prompt** — Secure masked input with `--prompt-token`  
-⛔ **Graceful Interruption** — Press Ctrl+C to save partial results  
 
 ---
 
 ## 🎯 Features
 
 ### Core
-- 🔍 GitHub repository search + curated direct subscription sources
+- 🔍 GitHub repository search + 32 curated direct subscription sources
 - 🚀 Three interfaces: Python API, CLI (simple & rich TUI), GUI (PySide6)
-- 📦 Deduplicated and clean output
+- 🏗️ **Pipeline orchestrator** — one-call full pipeline with cancellation support
+- 📦 Structural deduplication (SHA-256 fingerprint)
 - 🌐 Supports vmess, vless, trojan, shadowsocks (ss), ssr
 - 💾 Export to text files
 - 📊 Protocol statistics
 
 ### Performance
+- ⚡ Async fetch: up to 10× faster via `httpx` + `asyncio` with semaphore control
 - ⚡ Async HTTP: 10-50x faster via concurrent downloads with connection pooling
 - 💾 Smart caching: 80-95% fewer API calls (memory or disk, configurable TTL)
-- 🎯 Quality scoring: 0–100 score based on latency thresholds
+- 🎯 Weighted scoring: 7-dimension quality score (latency, reachability, protocol,
+  trust, freshness, uniqueness, Google 204) with A–F grade
 - 🔄 Retry logic: exponential backoff with configurable max retries
-- ⛔ Graceful interruption: Ctrl+C saves partial results before exit
+- ⛔ Graceful interruption: Ctrl+C or `StopController.stop()` saves partial results
+
+### Health Checking
+- 🔌 **Layer 1** — TCP connectivity + latency
+- 🌐 **Layer 2** — Direct HTTP probe
+- 🔒 **Layer 3** — xray SOCKS5 + Google 204 real-world check
+- 📊 Batch processing with stop-event checkpoints
 
 ### Developer Experience
 - 🛡️ `Result[T, E]` type for explicit error handling
 - 📈 `get_rate_limit_info()` for API monitoring
 - 🔒 Token validation, sanitization, and security warnings
 - ⌨️ Interactive token prompt with masked input
-- 🧪 78% test coverage across Linux, macOS, and Windows
+- 🧪 ~85% test coverage across Linux, macOS, and Windows
 - ✅ CI/CD: Automated testing and deployment
 
 ---
@@ -79,7 +84,7 @@ The goal is to give you a clean, deduplicated list of `vmess://`, `vless://`, `t
 
 - Python ≥ 3.8
 - Internet connection
-- Optional: `aiohttp` or `httpx` (async), `diskcache` (caching), `PySide6` (GUI)
+- Optional: `httpx` (async fetch), `aiohttp` (health checks), `diskcache` (caching), `PySide6` (GUI)
 
 ---
 
@@ -118,94 +123,60 @@ pip install -e ".[all,dev]"
 
 ---
 
-## 🔒 Token Security
-
-**Never** pass tokens directly in code or CLI arguments. They can be exposed via process listings, shell history, logs, and tracebacks.
-
-### Method 1: Environment Variable (Recommended)
-
-```bash
-# Recommended: environment variable
-export GITHUB_TOKEN="ghp_your_token_here"
-
-# Permanent (Linux/macOS)
-echo 'export GITHUB_TOKEN="ghp_your_token_here"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-```python
-from v2ray_finder import V2RayServerFinder
-
-# Reads GITHUB_TOKEN automatically
-finder = V2RayServerFinder()
-
-# Explicit factory method
-finder = V2RayServerFinder.from_env()
-```
-
-### Method 2: Interactive Prompt (New! ✨)
-
-```bash
-# Secure masked input
-v2ray-finder --prompt-token -s -o servers.txt
-v2ray-finder-rich --prompt-token
-
-# In interactive mode (no args), you'll be prompted automatically
-v2ray-finder-rich
-# → "Do you want to provide a GitHub token? (y/n)"
-```
-
-**Rate Limits:**
-- Without token: 60 requests/hour
-- With token: 5000 requests/hour
-
-Generate a token at [GitHub Settings → Developer settings → Personal access tokens](https://github.com/settings/tokens) with `public_repo` scope.
-
-> ⚠️ **Security Note:** Never use `-t` flag for tokens (insecure). Use env var or `--prompt-token` instead.
-
----
-
-## ⛔ Graceful Interruption (New! ✨)
-
-**Press Ctrl+C at any time** during fetch operations to:
-- Stop immediately without data loss
-- Save all servers collected so far
-- Display statistics for partial results
-- Exit cleanly with code `130`
-
-```bash
-v2ray-finder -s -o servers.txt
-# ... fetching ...
-# Press Ctrl+C
-
-[!] Interrupted by user. Saving partial results...
-[✓] Saved 47 servers to v2ray_servers_partial.txt
-
-Total servers: 47
-By protocol:
-  vmess: 23
-  vless: 15
-  trojan: 9
-```
-
-**Rich CLI** version:
-
-```bash
-v2ray-finder-rich -s
-# Press Ctrl+C during fetch
-
-⚠ Interrupted by user
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
-✓ Saved 47 servers to v2ray_servers_partial.txt
-```
-
-> 📖 **See detailed guide:** [docs/INTERRUPTION_GUIDE.md](docs/INTERRUPTION_GUIDE.md)
-
----
-
 ## 📚 Python API
 
-### Basic Usage
+### Pipeline (Recommended — v0.6.0+)
+
+```python
+from v2ray_finder import Pipeline, StopController, PipelineResult
+
+# Simple run — health check enabled, async fetch if httpx installed
+pipeline = Pipeline(
+    check_health=True,
+    check_http_probe=False,
+    check_google_204=False,
+    fetch_concurrency=10,   # concurrent source fetches
+    limit=500,              # cap configs after dedup
+)
+result: PipelineResult = pipeline.run()
+
+print(f"Fetched {result.stats['fetched']} raw → {result.stats['deduped']} unique")
+for s in result.scores[:10]:
+    print(f"{s.grade}  {s.total:.4f}  {s.config[:80]}")
+```
+
+**With cancellation (GUI / worker thread):**
+
+```python
+import threading
+from v2ray_finder import Pipeline, StopController
+
+stop = StopController()
+
+def worker():
+    pipeline = Pipeline(check_health=True)
+    result = pipeline.run(stop_event=stop.event)
+    print(f"Scored: {result.stats['scored']}")
+
+t = threading.Thread(target=worker)
+t.start()
+
+# From GUI button / signal:
+stop.stop()   # cancels at next checkpoint
+t.join()
+```
+
+**With progress callback:**
+
+```python
+def on_progress(stage: str, current: int, total: int, message: str):
+    print(f"[{stage}] {current}/{total} — {message}")
+
+pipeline = Pipeline(check_health=True)
+result = pipeline.run(progress_callback=on_progress)
+```
+
+### Classic API
 
 ```python
 from v2ray_finder import V2RayServerFinder
@@ -228,69 +199,6 @@ count, filename = finder.save_to_file(
 print(f"Saved {count} servers to {filename}")
 ```
 
-### Async Fetching ⚡
-
-```python
-from v2ray_finder.async_fetcher import fetch_urls_concurrently
-
-urls = [f"https://example.com/config{i}.txt" for i in range(100)]
-results = fetch_urls_concurrently(urls, max_concurrent=50, timeout=10.0)
-
-for result in results:
-    if result.success:
-        print(f"✓ {result.url}: {len(result.content)} bytes in {result.elapsed_ms:.0f}ms")
-    else:
-        print(f"✗ {result.url}: {result.error}")
-```
-
-### Caching 💾
-
-```python
-from v2ray_finder.cache import CacheManager
-
-cache = CacheManager(backend='disk', ttl=3600)
-
-@cache.cached('github_search', ttl=1800)
-def search_github_repos(keywords):
-    return finder.search_repos(keywords=keywords)
-
-stats = cache.get_stats()
-print(f"Cache hit rate: {stats['hit_rate']:.1f}%")
-```
-
-### Error Handling 🛡️
-
-```python
-from v2ray_finder import (
-    V2RayServerFinder,
-    RateLimitError,
-    AuthenticationError,
-    NetworkError,
-)
-
-finder = V2RayServerFinder()
-
-# Method 1: Result type (explicit)
-result = finder.search_repos(keywords=["v2ray"])
-if result.is_ok():
-    repos = result.unwrap()
-else:
-    error = result.error
-    if isinstance(error, RateLimitError):
-        print(f"Rate limit: {error.details['remaining']}/{error.details['limit']}")
-    elif isinstance(error, AuthenticationError):
-        print("Invalid GitHub token")
-
-# Method 2: Exception mode
-finder = V2RayServerFinder(raise_errors=True)
-try:
-    repos = finder.search_repos_or_empty()
-except RateLimitError as e:
-    print(f"Rate limit exceeded: {e}")
-except NetworkError as e:
-    print(f"Network error: {e}")
-```
-
 ### Health Checking 🏥
 
 ```python
@@ -309,6 +217,26 @@ for server in servers[:10]:
         f"Quality: {server['quality_score']:5.1f} | "
         f"Latency: {server['latency_ms']:6.1f}ms"
     )
+```
+
+### Error Handling 🛡️
+
+```python
+from v2ray_finder import (
+    V2RayServerFinder,
+    RateLimitError,
+    AuthenticationError,
+)
+
+result = finder.search_repos(keywords=["v2ray"])
+if result.is_ok():
+    repos = result.unwrap()
+else:
+    error = result.error
+    if isinstance(error, RateLimitError):
+        print(f"Rate limit: {error.details['remaining']}/{error.details['limit']}")
+    elif isinstance(error, AuthenticationError):
+        print("Invalid GitHub token")
 ```
 
 ---
@@ -339,12 +267,6 @@ v2ray-finder-rich                      # Beautiful Rich TUI
 v2ray-finder-rich --prompt-token       # With secure token prompt
 ```
 
-**Interactive mode features:**
-- Token prompt on first run (if not in env)
-- Press Ctrl+C during fetch → saves partial results
-- Visual progress bars and spinners
-- Color-coded health status
-
 ---
 
 ## 🖥️ GUI
@@ -358,38 +280,23 @@ Features: token field, GitHub search toggle, limit configuration, fetch & displa
 
 ---
 
-## 🛠️ Advanced Usage
+## 🔒 Token Security
 
-### Interruption in Scripts
-
-```bash
-#!/bin/bash
-
-v2ray-finder -s -o servers.txt
-exit_code=$?
-
-if [ $exit_code -eq 0 ]; then
-    echo "Success!"
-    # Process servers.txt
-elif [ $exit_code -eq 130 ]; then
-    echo "Interrupted - using partial results"
-    mv v2ray_servers_partial.txt servers.txt
-else
-    echo "Error occurred"
-    exit 1
-fi
-```
-
-### CI/CD with Timeout
+**Never** pass tokens directly in code or CLI arguments.
 
 ```bash
-# Timeout after 2 minutes, use partial results
-timeout 120 v2ray-finder -s -o servers.txt || {
-    if [ $? -eq 124 ]; then
-        mv v2ray_servers_partial.txt servers.txt
-    fi
-}
+export GITHUB_TOKEN="ghp_your_token_here"
 ```
+
+```python
+from v2ray_finder import V2RayServerFinder
+finder = V2RayServerFinder()           # reads GITHUB_TOKEN automatically
+finder = V2RayServerFinder.from_env()  # explicit factory method
+```
+
+**Rate Limits:** Without token: 60 req/hour · With token: 5,000 req/hour
+
+Generate a token at [GitHub Settings → Personal access tokens](https://github.com/settings/tokens) with `public_repo` scope.
 
 ---
 
@@ -417,7 +324,7 @@ pip install -e ".[dev]"
 pytest tests/ --cov=v2ray_finder --cov-report=html
 ```
 
-**Current test coverage: 78%** across Python 3.8–3.12, Linux, macOS & Windows.
+**Current test coverage: ~85%** across Python 3.8–3.12, Linux, macOS & Windows.
 
 ---
 
@@ -435,7 +342,6 @@ Free to use, modify, and redistribute.
 - [Issues](https://github.com/alisadeghiaghili/v2ray-finder/issues)
 - [Discussions](https://github.com/alisadeghiaghili/v2ray-finder/discussions)
 - [CHANGELOG](CHANGELOG.md)
-- [Interruption Guide](docs/INTERRUPTION_GUIDE.md)
 
 ---
 
