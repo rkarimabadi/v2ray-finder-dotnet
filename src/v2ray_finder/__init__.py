@@ -43,13 +43,13 @@ from .normalizer import (
 )
 from .result import Err, Ok, Result
 from .source_registry import SourceRegistry, SourceStats
-from .sources import SourceEntry, SourceType, SourceTrust
+from .sources import SourceEntry, SourceTrust, SourceType
 
 try:
     from .health_checker import (
         HealthChecker,
-        ServerHealth,
         HealthStatus,
+        ServerHealth,
         ServerValidator,
         filter_healthy_servers,
         sort_by_quality,
@@ -69,6 +69,7 @@ __version__ = "0.6.0"
 # ---------------------------------------------------------------------------
 # High-level convenience API  (V1-A3)
 # ---------------------------------------------------------------------------
+
 
 def find_servers(
     *,
@@ -138,15 +139,15 @@ def find_servers(
         )
     """
     pipeline = Pipeline(
-        check_health           = check_health,
-        check_google_204       = check_google_204,
-        timeout                = timeout,
-        min_quality_score      = min_quality_score,
-        limit                  = limit,
-        github_token           = github_token,
-        max_configs_per_source = max_configs_per_source,
-        max_total_configs      = max_total_configs,
-        binary_path            = binary_path,
+        check_health=check_health,
+        check_google_204=check_google_204,
+        timeout=timeout,
+        min_quality_score=min_quality_score,
+        limit=limit,
+        github_token=github_token,
+        max_configs_per_source=max_configs_per_source,
+        max_total_configs=max_total_configs,
+        binary_path=binary_path,
     )
     result = pipeline.run()
     return result.top_configs or result.configs
@@ -195,6 +196,7 @@ __all__ = [
 
 # xray real-connectivity layer (optional)
 try:
+    from .xray_config_adapter import ConfigAdapter, UnsupportedProtocolError
     from .xray_connectivity import (
         RealConnectivityChecker,
         RealHealthResult,
@@ -202,11 +204,10 @@ try:
         find_free_port,
     )
     from .xray_runner import (
+        _COMMON_INSTALL_DIRS,
         XrayBinaryManager,
         XrayBinaryNotFoundError,
         XrayRunner,
-        _COMMON_INSTALL_DIRS,
     )
-    from .xray_config_adapter import ConfigAdapter, UnsupportedProtocolError
 except ImportError:
     pass

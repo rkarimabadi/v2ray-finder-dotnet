@@ -1,4 +1,5 @@
 """Tests for the high-level find_servers() public API (V1-A3)."""
+
 from __future__ import annotations
 
 import unittest
@@ -8,9 +9,8 @@ import v2ray_finder
 from v2ray_finder.pipeline import Pipeline, PipelineResult, StopController
 from v2ray_finder.scorer import ServerScore
 
-
-VMESS  = "vmess://eyJhZGQiOiIxMjcuMC4wLjEiLCJwb3J0Ijo0NDMsImlkIjoiYWJjMTIzIn0="
-VLESS  = "vless://uuid@1.2.3.4:443?security=tls"
+VMESS = "vmess://eyJhZGQiOiIxMjcuMC4wLjEiLCJwb3J0Ijo0NDMsImlkIjoiYWJjMTIzIn0="
+VLESS = "vless://uuid@1.2.3.4:443?security=tls"
 TROJAN = "trojan://password@5.6.7.8:443?security=tls"
 
 
@@ -25,6 +25,7 @@ def _make_scores(*configs):
 # find_servers — unit
 # ---------------------------------------------------------------------------
 
+
 class TestFindServers(unittest.TestCase):
 
     def _patch_pipeline_run(self, configs=None, scores=None):
@@ -32,7 +33,12 @@ class TestFindServers(unittest.TestCase):
         result = PipelineResult(
             configs=configs or [],
             scores=scores or [],
-            stats={"fetched": len(configs or []), "deduped": 0, "healthy": 0, "scored": 0},
+            stats={
+                "fetched": len(configs or []),
+                "deduped": 0,
+                "healthy": 0,
+                "scored": 0,
+            },
         )
         return patch.object(Pipeline, "run", return_value=result)
 
@@ -63,8 +69,10 @@ class TestFindServers(unittest.TestCase):
 
     # -- limit forwarded to Pipeline --
     def test_limit_passed_to_pipeline(self):
-        with patch.object(Pipeline, "__init__", return_value=None) as mock_init, \
-             patch.object(Pipeline, "run",   return_value=PipelineResult()):
+        with (
+            patch.object(Pipeline, "__init__", return_value=None) as mock_init,
+            patch.object(Pipeline, "run", return_value=PipelineResult()),
+        ):
             mock_init.return_value = None
             v2ray_finder.find_servers(limit=10, check_health=False)
             _, kwargs = mock_init.call_args
@@ -72,8 +80,10 @@ class TestFindServers(unittest.TestCase):
 
     # -- github_token forwarded --
     def test_github_token_passed_to_pipeline(self):
-        with patch.object(Pipeline, "__init__", return_value=None) as mock_init, \
-             patch.object(Pipeline, "run",   return_value=PipelineResult()):
+        with (
+            patch.object(Pipeline, "__init__", return_value=None) as mock_init,
+            patch.object(Pipeline, "run", return_value=PipelineResult()),
+        ):
             v2ray_finder.find_servers(github_token="ghp_test")
             _, kwargs = mock_init.call_args
             self.assertEqual(kwargs.get("github_token"), "ghp_test")
@@ -86,23 +96,29 @@ class TestFindServers(unittest.TestCase):
 
     # -- check_health forwarded --
     def test_check_health_false_forwarded(self):
-        with patch.object(Pipeline, "__init__", return_value=None) as mock_init, \
-             patch.object(Pipeline, "run",   return_value=PipelineResult()):
+        with (
+            patch.object(Pipeline, "__init__", return_value=None) as mock_init,
+            patch.object(Pipeline, "run", return_value=PipelineResult()),
+        ):
             v2ray_finder.find_servers(check_health=False)
             _, kwargs = mock_init.call_args
             self.assertFalse(kwargs.get("check_health"))
 
     def test_check_health_true_forwarded(self):
-        with patch.object(Pipeline, "__init__", return_value=None) as mock_init, \
-             patch.object(Pipeline, "run",   return_value=PipelineResult()):
+        with (
+            patch.object(Pipeline, "__init__", return_value=None) as mock_init,
+            patch.object(Pipeline, "run", return_value=PipelineResult()),
+        ):
             v2ray_finder.find_servers(check_health=True)
             _, kwargs = mock_init.call_args
             self.assertTrue(kwargs.get("check_health"))
 
     # -- min_quality_score forwarded --
     def test_min_quality_score_forwarded(self):
-        with patch.object(Pipeline, "__init__", return_value=None) as mock_init, \
-             patch.object(Pipeline, "run",   return_value=PipelineResult()):
+        with (
+            patch.object(Pipeline, "__init__", return_value=None) as mock_init,
+            patch.object(Pipeline, "run", return_value=PipelineResult()),
+        ):
             v2ray_finder.find_servers(min_quality_score=60.0)
             _, kwargs = mock_init.call_args
             self.assertEqual(kwargs.get("min_quality_score"), 60.0)
@@ -119,12 +135,15 @@ class TestFindServers(unittest.TestCase):
 # find_servers — cap integration
 # ---------------------------------------------------------------------------
 
+
 class TestFindServersCaps(unittest.TestCase):
     """Verify that cap params are forwarded to Pipeline."""
 
     def _init_kwargs(self, **kwargs):
-        with patch.object(Pipeline, "__init__", return_value=None) as mock_init, \
-             patch.object(Pipeline, "run",   return_value=PipelineResult()):
+        with (
+            patch.object(Pipeline, "__init__", return_value=None) as mock_init,
+            patch.object(Pipeline, "run", return_value=PipelineResult()),
+        ):
             v2ray_finder.find_servers(**kwargs)
             _, kw = mock_init.call_args
             return kw

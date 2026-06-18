@@ -14,7 +14,6 @@ import pytest
 
 from v2ray_finder.xray_config_adapter import ConfigAdapter, UnsupportedProtocolError
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

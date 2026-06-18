@@ -16,6 +16,7 @@ Tests in this file verify:
 5. Single-source baseline — no collision, attribution trivially correct.
 6. Unknown config (not in any source) falls back to empty url + trust 1.
 """
+
 from __future__ import annotations
 
 import unittest
@@ -24,17 +25,16 @@ from unittest.mock import MagicMock, patch
 from v2ray_finder.pipeline import Pipeline, PipelineResult
 from v2ray_finder.sources import SourceEntry, SourceTrust
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
-SHARED  = "vmess://AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+SHARED = "vmess://AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
 HIGH_ONLY = "vmess://BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=="
-LOW_ONLY  = "vmess://CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=="
+LOW_ONLY = "vmess://CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=="
 
 URL_HIGH = "http://high.example/sub"
-URL_LOW  = "http://low.example/sub"
+URL_LOW = "http://low.example/sub"
 
 
 def _src(url: str, trust: SourceTrust) -> SourceEntry:
@@ -51,14 +51,15 @@ def _make_pipeline(sources, stub: dict, check_health: bool = False) -> Pipeline:
 # 1. High-trust wins for shared config
 # ---------------------------------------------------------------------------
 
+
 class TestHighTrustWinsForSharedConfig(unittest.TestCase):
 
     def setUp(self):
         src_high = _src(URL_HIGH, SourceTrust.HIGH)
-        src_low  = _src(URL_LOW,  SourceTrust.LOW)
+        src_low = _src(URL_LOW, SourceTrust.LOW)
         stub = {
             URL_HIGH: [SHARED, HIGH_ONLY],
-            URL_LOW:  [SHARED, LOW_ONLY],
+            URL_LOW: [SHARED, LOW_ONLY],
         }
         self.p = _make_pipeline([src_high, src_low], stub)
         self.result = self.p.run()
@@ -83,14 +84,15 @@ class TestHighTrustWinsForSharedConfig(unittest.TestCase):
 # 2. Non-shared configs carry their own source
 # ---------------------------------------------------------------------------
 
+
 class TestNonSharedConfigsCarryOwnSource(unittest.TestCase):
 
     def setUp(self):
         src_high = _src(URL_HIGH, SourceTrust.HIGH)
-        src_low  = _src(URL_LOW,  SourceTrust.LOW)
+        src_low = _src(URL_LOW, SourceTrust.LOW)
         stub = {
             URL_HIGH: [SHARED, HIGH_ONLY],
-            URL_LOW:  [SHARED, LOW_ONLY],
+            URL_LOW: [SHARED, LOW_ONLY],
         }
         p = _make_pipeline([src_high, src_low], stub)
         result = p.run()
@@ -109,15 +111,16 @@ class TestNonSharedConfigsCarryOwnSource(unittest.TestCase):
 # 3. overlap_ratio reflects actual source
 # ---------------------------------------------------------------------------
 
+
 class TestOverlapRatioReflectsActualSource(unittest.TestCase):
     """overlap_ratio for each config must come from its attributed source URL."""
 
     def test_overlap_ratio_matches_source(self):
         src_high = _src(URL_HIGH, SourceTrust.HIGH)
-        src_low  = _src(URL_LOW,  SourceTrust.LOW)
+        src_low = _src(URL_LOW, SourceTrust.LOW)
         stub = {
             URL_HIGH: [SHARED, HIGH_ONLY],
-            URL_LOW:  [SHARED, LOW_ONLY],
+            URL_LOW: [SHARED, LOW_ONLY],
         }
         p = _make_pipeline([src_high, src_low], stub)
         result = p.run()
@@ -128,7 +131,9 @@ class TestOverlapRatioReflectsActualSource(unittest.TestCase):
         for cfg, d in hd_map.items():
             expected_overlap = result.overlap_map.get(d["source_url"], 0.0)
             self.assertAlmostEqual(
-                d["overlap_ratio"], expected_overlap, places=6,
+                d["overlap_ratio"],
+                expected_overlap,
+                places=6,
                 msg=f"overlap_ratio mismatch for {cfg[:40]}",
             )
 
@@ -137,40 +142,42 @@ class TestOverlapRatioReflectsActualSource(unittest.TestCase):
 # 4. Unchecked path (check_health=False) also carries correct attribution
 # ---------------------------------------------------------------------------
 
+
 class TestUncheckedPathAttributionCorrect(unittest.TestCase):
 
     def test_unchecked_shared_config_high_trust_wins(self):
         src_high = _src(URL_HIGH, SourceTrust.HIGH)
-        src_low  = _src(URL_LOW,  SourceTrust.LOW)
+        src_low = _src(URL_LOW, SourceTrust.LOW)
         stub = {
             URL_HIGH: [SHARED, HIGH_ONLY],
-            URL_LOW:  [SHARED, LOW_ONLY],
+            URL_LOW: [SHARED, LOW_ONLY],
         }
         p = _make_pipeline([src_high, src_low], stub, check_health=False)
         result = p.run()
         hd_map = {d["config"]: d for d in result.health_dicts}
 
-        self.assertEqual(hd_map[SHARED]["source_url"],   URL_HIGH)
+        self.assertEqual(hd_map[SHARED]["source_url"], URL_HIGH)
         self.assertEqual(hd_map[SHARED]["source_trust"], SourceTrust.HIGH.value)
 
     def test_unchecked_non_shared_carries_own_source(self):
         src_high = _src(URL_HIGH, SourceTrust.HIGH)
-        src_low  = _src(URL_LOW,  SourceTrust.LOW)
+        src_low = _src(URL_LOW, SourceTrust.LOW)
         stub = {
             URL_HIGH: [HIGH_ONLY],
-            URL_LOW:  [LOW_ONLY],
+            URL_LOW: [LOW_ONLY],
         }
         p = _make_pipeline([src_high, src_low], stub, check_health=False)
         result = p.run()
         hd_map = {d["config"]: d for d in result.health_dicts}
 
-        self.assertEqual(hd_map[HIGH_ONLY]["source_url"],   URL_HIGH)
-        self.assertEqual(hd_map[LOW_ONLY]["source_url"],    URL_LOW)
+        self.assertEqual(hd_map[HIGH_ONLY]["source_url"], URL_HIGH)
+        self.assertEqual(hd_map[LOW_ONLY]["source_url"], URL_LOW)
 
 
 # ---------------------------------------------------------------------------
 # 5. Single-source baseline
 # ---------------------------------------------------------------------------
+
 
 class TestSingleSourceBaseline(unittest.TestCase):
 
@@ -180,13 +187,14 @@ class TestSingleSourceBaseline(unittest.TestCase):
         p = _make_pipeline([src], stub, check_health=False)
         result = p.run()
         for d in result.health_dicts:
-            self.assertEqual(d["source_url"],   URL_HIGH)
+            self.assertEqual(d["source_url"], URL_HIGH)
             self.assertEqual(d["source_trust"], SourceTrust.HIGH.value)
 
 
 # ---------------------------------------------------------------------------
 # 6. Unknown config falls back gracefully
 # ---------------------------------------------------------------------------
+
 
 class TestUnknownConfigFallback(unittest.TestCase):
     """_build_config_source_map returns '' for configs not in any source.
@@ -207,7 +215,7 @@ class TestUnknownConfigFallback(unittest.TestCase):
 
         unknown_cfg = "vmess://ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ=="
         d = p._make_unchecked_dict(unknown_cfg, {}, {})
-        self.assertEqual(d["source_url"],   "")
+        self.assertEqual(d["source_url"], "")
         self.assertEqual(d["source_trust"], 1)
         self.assertAlmostEqual(d["overlap_ratio"], 0.0)
 
@@ -215,6 +223,7 @@ class TestUnknownConfigFallback(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # 7. Equal-trust tie-breaking: first-wins (stable)
 # ---------------------------------------------------------------------------
+
 
 class TestEqualTrustFirstWins(unittest.TestCase):
     """When two sources have identical trust, the first source in iteration

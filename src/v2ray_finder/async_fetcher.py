@@ -8,24 +8,28 @@ from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import aiohttp
+
     AIOHTTP_AVAILABLE = True
 except ImportError:
     AIOHTTP_AVAILABLE = False
 
 try:
     import httpx
+
     HTTPX_AVAILABLE = True
 except ImportError:
     HTTPX_AVAILABLE = False
 
 from .exceptions import (
+    ErrorType,
     GitHubAPIError,
     NetworkError,
     RateLimitError,
-    V2RayFinderError,
-    ErrorType,
 )
 from .exceptions import TimeoutError as V2RayTimeoutError
+from .exceptions import (
+    V2RayFinderError,
+)
 from .result import Err, Ok, Result
 
 logger = logging.getLogger(__name__)
@@ -34,6 +38,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Helpers: build structured error dicts
 # ---------------------------------------------------------------------------
+
 
 def _structured(exc: V2RayFinderError) -> dict:
     """Return the to_dict() payload of a V2RayFinderError."""
@@ -64,7 +69,8 @@ def _http_error(url: str, status: int) -> Tuple[str, dict]:
 
 
 def _unknown_error(url: str, detail: str) -> Tuple[str, dict]:
-    from .exceptions import V2RayFinderError, ErrorType
+    from .exceptions import ErrorType, V2RayFinderError
+
     exc = V2RayFinderError(detail, error_type=ErrorType.UNKNOWN_ERROR)
     return exc.message, _structured(exc)
 
@@ -72,6 +78,7 @@ def _unknown_error(url: str, detail: str) -> Tuple[str, dict]:
 # ---------------------------------------------------------------------------
 # FetchResult
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class FetchResult:
@@ -96,18 +103,19 @@ class FetchResult:
                         }
     """
 
-    url:              str
-    content:          Optional[str]
-    status_code:      Optional[int]
-    success:          bool
-    error:            Optional[str]
-    elapsed_ms:       float
+    url: str
+    content: Optional[str]
+    status_code: Optional[int]
+    success: bool
+    error: Optional[str]
+    elapsed_ms: float
     structured_error: Optional[dict] = field(default=None)
 
 
 # ---------------------------------------------------------------------------
 # AsyncFetcher
 # ---------------------------------------------------------------------------
+
 
 class AsyncFetcher:
     """
@@ -126,10 +134,10 @@ class AsyncFetcher:
         headers: Optional[Dict[str, str]] = None,
     ):
         self.max_concurrent = max_concurrent
-        self.timeout        = timeout
-        self.max_retries    = max_retries
-        self.retry_delay    = retry_delay
-        self.headers        = headers or {}
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.headers = headers or {}
 
         if AIOHTTP_AVAILABLE:
             self.backend = "aiohttp"
@@ -161,55 +169,69 @@ class AsyncFetcher:
 
                     if response.status == 200:
                         return FetchResult(
-                            url=url, content=content,
+                            url=url,
+                            content=content,
                             status_code=response.status,
-                            success=True, error=None,
+                            success=True,
+                            error=None,
                             elapsed_ms=elapsed,
                         )
                     elif response.status in (403, 429):
                         msg, se = _rate_limit_error(url, response.status)
                         return FetchResult(
-                            url=url, content=None,
+                            url=url,
+                            content=None,
                             status_code=response.status,
-                            success=False, error=msg,
+                            success=False,
+                            error=msg,
                             elapsed_ms=elapsed,
                             structured_error=se,
                         )
                     else:
                         if attempt < self.max_retries - 1:
-                            await asyncio.sleep(self.retry_delay * (2 ** attempt))
+                            await asyncio.sleep(self.retry_delay * (2**attempt))
                             continue
                         msg, se = _http_error(url, response.status)
                         return FetchResult(
-                            url=url, content=None,
+                            url=url,
+                            content=None,
                             status_code=response.status,
-                            success=False, error=msg,
+                            success=False,
+                            error=msg,
                             elapsed_ms=elapsed,
                             structured_error=se,
                         )
 
             except asyncio.TimeoutError:
                 if attempt < self.max_retries - 1:
-                    await asyncio.sleep(self.retry_delay * (2 ** attempt))
+                    await asyncio.sleep(self.retry_delay * (2**attempt))
                     continue
                 elapsed = (time.time() - start_time) * 1000
                 msg, se = _timeout_error(url)
                 return FetchResult(
-                    url=url, content=None, status_code=None,
-                    success=False, error=msg,
-                    elapsed_ms=elapsed, structured_error=se,
+                    url=url,
+                    content=None,
+                    status_code=None,
+                    success=False,
+                    error=msg,
+                    elapsed_ms=elapsed,
+                    structured_error=se,
                 )
 
             except aiohttp.ClientError as e:
                 if attempt < self.max_retries - 1:
-                    await asyncio.sleep(self.retry_delay * (2 ** attempt))
+                    await asyncio.sleep(self.retry_delay * (2**attempt))
                     continue
                 elapsed = (time.time() - start_time) * 1000
                 msg, se = _network_error(url, str(e))
                 return FetchResult(
-                    url=url, content=None, status_code=None,
-                    success=False, error=msg,
-                    elapsed_ms=elapsed, structured_error=se,
+                    url=url,
+                    content=None,
+                    status_code=None,
+                    success=False,
+                    error=msg,
+                    elapsed_ms=elapsed,
+                    structured_error=se,
                 )
 
             except Exception as e:
@@ -217,17 +239,25 @@ class AsyncFetcher:
                 logger.error("Unexpected error fetching %s: %s", url, e)
                 msg, se = _unknown_error(url, str(e))
                 return FetchResult(
-                    url=url, content=None, status_code=None,
-                    success=False, error=msg,
-                    elapsed_ms=elapsed, structured_error=se,
+                    url=url,
+                    content=None,
+                    status_code=None,
+                    success=False,
+                    error=msg,
+                    elapsed_ms=elapsed,
+                    structured_error=se,
                 )
 
         elapsed = (time.time() - start_time) * 1000
         msg, se = _network_error(url, "Max retries exceeded")
         return FetchResult(
-            url=url, content=None, status_code=None,
-            success=False, error=msg,
-            elapsed_ms=elapsed, structured_error=se,
+            url=url,
+            content=None,
+            status_code=None,
+            success=False,
+            error=msg,
+            elapsed_ms=elapsed,
+            structured_error=se,
         )
 
     # ------------------------------------------------------------------
@@ -244,57 +274,73 @@ class AsyncFetcher:
         for attempt in range(self.max_retries):
             try:
                 response = await client.get(url)
-                elapsed  = (time.time() - start_time) * 1000
+                elapsed = (time.time() - start_time) * 1000
 
                 if response.status_code == 200:
                     return FetchResult(
-                        url=url, content=response.text,
+                        url=url,
+                        content=response.text,
                         status_code=response.status_code,
-                        success=True, error=None,
+                        success=True,
+                        error=None,
                         elapsed_ms=elapsed,
                     )
                 elif response.status_code in (403, 429):
                     msg, se = _rate_limit_error(url, response.status_code)
                     return FetchResult(
-                        url=url, content=None,
+                        url=url,
+                        content=None,
                         status_code=response.status_code,
-                        success=False, error=msg,
-                        elapsed_ms=elapsed, structured_error=se,
+                        success=False,
+                        error=msg,
+                        elapsed_ms=elapsed,
+                        structured_error=se,
                     )
                 else:
                     if attempt < self.max_retries - 1:
-                        await asyncio.sleep(self.retry_delay * (2 ** attempt))
+                        await asyncio.sleep(self.retry_delay * (2**attempt))
                         continue
                     msg, se = _http_error(url, response.status_code)
                     return FetchResult(
-                        url=url, content=None,
+                        url=url,
+                        content=None,
                         status_code=response.status_code,
-                        success=False, error=msg,
-                        elapsed_ms=elapsed, structured_error=se,
+                        success=False,
+                        error=msg,
+                        elapsed_ms=elapsed,
+                        structured_error=se,
                     )
 
             except httpx.TimeoutException:
                 if attempt < self.max_retries - 1:
-                    await asyncio.sleep(self.retry_delay * (2 ** attempt))
+                    await asyncio.sleep(self.retry_delay * (2**attempt))
                     continue
                 elapsed = (time.time() - start_time) * 1000
                 msg, se = _timeout_error(url)
                 return FetchResult(
-                    url=url, content=None, status_code=None,
-                    success=False, error=msg,
-                    elapsed_ms=elapsed, structured_error=se,
+                    url=url,
+                    content=None,
+                    status_code=None,
+                    success=False,
+                    error=msg,
+                    elapsed_ms=elapsed,
+                    structured_error=se,
                 )
 
             except httpx.HTTPError as e:
                 if attempt < self.max_retries - 1:
-                    await asyncio.sleep(self.retry_delay * (2 ** attempt))
+                    await asyncio.sleep(self.retry_delay * (2**attempt))
                     continue
                 elapsed = (time.time() - start_time) * 1000
                 msg, se = _network_error(url, str(e))
                 return FetchResult(
-                    url=url, content=None, status_code=None,
-                    success=False, error=msg,
-                    elapsed_ms=elapsed, structured_error=se,
+                    url=url,
+                    content=None,
+                    status_code=None,
+                    success=False,
+                    error=msg,
+                    elapsed_ms=elapsed,
+                    structured_error=se,
                 )
 
             except Exception as e:
@@ -302,17 +348,25 @@ class AsyncFetcher:
                 logger.error("Unexpected error fetching %s: %s", url, e)
                 msg, se = _unknown_error(url, str(e))
                 return FetchResult(
-                    url=url, content=None, status_code=None,
-                    success=False, error=msg,
-                    elapsed_ms=elapsed, structured_error=se,
+                    url=url,
+                    content=None,
+                    status_code=None,
+                    success=False,
+                    error=msg,
+                    elapsed_ms=elapsed,
+                    structured_error=se,
                 )
 
         elapsed = (time.time() - start_time) * 1000
         msg, se = _network_error(url, "Max retries exceeded")
         return FetchResult(
-            url=url, content=None, status_code=None,
-            success=False, error=msg,
-            elapsed_ms=elapsed, structured_error=se,
+            url=url,
+            content=None,
+            status_code=None,
+            success=False,
+            error=msg,
+            elapsed_ms=elapsed,
+            structured_error=se,
         )
 
     # ------------------------------------------------------------------
@@ -325,13 +379,13 @@ class AsyncFetcher:
 
         if self.backend == "aiohttp":
             timeout_obj = aiohttp.ClientTimeout(total=self.timeout)
-            connector   = aiohttp.TCPConnector(limit=self.max_concurrent)
+            connector = aiohttp.TCPConnector(limit=self.max_concurrent)
             async with aiohttp.ClientSession(
                 headers=self.headers,
                 timeout=timeout_obj,
                 connector=connector,
             ) as session:
-                tasks   = [self._fetch_with_aiohttp(session, url) for url in urls]
+                tasks = [self._fetch_with_aiohttp(session, url) for url in urls]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 return self._handle_gather_results(urls, results)
 
@@ -342,7 +396,7 @@ class AsyncFetcher:
                 timeout=self.timeout,
                 limits=limits,
             ) as client:
-                tasks   = [self._fetch_with_httpx(client, url) for url in urls]
+                tasks = [self._fetch_with_httpx(client, url) for url in urls]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 return self._handle_gather_results(urls, results)
 
@@ -363,11 +417,17 @@ class AsyncFetcher:
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 msg, se = _unknown_error(urls[i], str(result))
-                out.append(FetchResult(
-                    url=urls[i], content=None, status_code=None,
-                    success=False, error=msg,
-                    elapsed_ms=0, structured_error=se,
-                ))
+                out.append(
+                    FetchResult(
+                        url=urls[i],
+                        content=None,
+                        status_code=None,
+                        success=False,
+                        error=msg,
+                        elapsed_ms=0,
+                        structured_error=se,
+                    )
+                )
             else:
                 out.append(result)
         return out
@@ -379,53 +439,82 @@ class AsyncFetcher:
     def fetch_many(self, urls: List[str]) -> List[FetchResult]:
         if self.backend == "sync":
             import requests
+
             results = []
             for url in urls:
                 start_time = time.time()
                 try:
                     response = requests.get(
-                        url, headers=self.headers, timeout=self.timeout,
+                        url,
+                        headers=self.headers,
+                        timeout=self.timeout,
                     )
                     elapsed = (time.time() - start_time) * 1000
                     if response.status_code == 200:
-                        results.append(FetchResult(
-                            url=url, content=response.text,
-                            status_code=response.status_code,
-                            success=True, error=None,
-                            elapsed_ms=elapsed,
-                        ))
+                        results.append(
+                            FetchResult(
+                                url=url,
+                                content=response.text,
+                                status_code=response.status_code,
+                                success=True,
+                                error=None,
+                                elapsed_ms=elapsed,
+                            )
+                        )
                     elif response.status_code in (403, 429):
                         msg, se = _rate_limit_error(url, response.status_code)
-                        results.append(FetchResult(
-                            url=url, content=None,
-                            status_code=response.status_code,
-                            success=False, error=msg,
-                            elapsed_ms=elapsed, structured_error=se,
-                        ))
+                        results.append(
+                            FetchResult(
+                                url=url,
+                                content=None,
+                                status_code=response.status_code,
+                                success=False,
+                                error=msg,
+                                elapsed_ms=elapsed,
+                                structured_error=se,
+                            )
+                        )
                     else:
                         msg, se = _http_error(url, response.status_code)
-                        results.append(FetchResult(
-                            url=url, content=None,
-                            status_code=response.status_code,
-                            success=False, error=msg,
-                            elapsed_ms=elapsed, structured_error=se,
-                        ))
+                        results.append(
+                            FetchResult(
+                                url=url,
+                                content=None,
+                                status_code=response.status_code,
+                                success=False,
+                                error=msg,
+                                elapsed_ms=elapsed,
+                                structured_error=se,
+                            )
+                        )
                 except requests.exceptions.Timeout:
                     elapsed = (time.time() - start_time) * 1000
                     msg, se = _timeout_error(url)
-                    results.append(FetchResult(
-                        url=url, content=None, status_code=None,
-                        success=False, error=msg,
-                        elapsed_ms=elapsed, structured_error=se,
-                    ))
+                    results.append(
+                        FetchResult(
+                            url=url,
+                            content=None,
+                            status_code=None,
+                            success=False,
+                            error=msg,
+                            elapsed_ms=elapsed,
+                            structured_error=se,
+                        )
+                    )
                 except Exception as e:
                     elapsed = (time.time() - start_time) * 1000
                     msg, se = _network_error(url, str(e))
-                    results.append(FetchResult(
-                        url=url, content=None, status_code=None,
-                        success=False, error=msg,
-                        elapsed_ms=elapsed, structured_error=se,
-                    ))
+                    results.append(
+                        FetchResult(
+                            url=url,
+                            content=None,
+                            status_code=None,
+                            success=False,
+                            error=msg,
+                            elapsed_ms=elapsed,
+                            structured_error=se,
+                        )
+                    )
             return results
 
         else:
@@ -433,8 +522,11 @@ class AsyncFetcher:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     import concurrent.futures
+
                     with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(asyncio.run, self.fetch_many_async(urls))
+                        future = executor.submit(
+                            asyncio.run, self.fetch_many_async(urls)
+                        )
                         return future.result()
                 else:
                     return loop.run_until_complete(self.fetch_many_async(urls))
@@ -445,6 +537,7 @@ class AsyncFetcher:
 # ---------------------------------------------------------------------------
 # Convenience function
 # ---------------------------------------------------------------------------
+
 
 def fetch_urls_concurrently(
     urls: List[str],

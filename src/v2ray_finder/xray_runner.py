@@ -24,11 +24,10 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 import zipfile
 from pathlib import Path
 from typing import List, Optional
-
-import urllib.request
 
 logger = logging.getLogger(__name__)
 
@@ -293,6 +292,7 @@ class XrayRunner:
 # XrayBinaryManager: the primary class expected by tests.
 # ---------------------------------------------------------------------------
 
+
 class XrayBinaryManager(XrayRunner):
     """Extended XrayRunner that supports all parameters expected by tests.
 
@@ -408,7 +408,9 @@ class XrayBinaryManager(XrayRunner):
                 f"Could not find asset '{asset_name}' in the latest xray release."
             )
 
-        target_dir = self._download_dir if self._download_dir is not None else _cache_dir()
+        target_dir = (
+            self._download_dir if self._download_dir is not None else _cache_dir()
+        )
         zip_path = target_dir / asset_name
         logger.info("Downloading %s ...", download_url)
         urllib.request.urlretrieve(download_url, zip_path)
@@ -503,7 +505,10 @@ class XrayBinaryManager(XrayRunner):
                         raise XrayBinaryNotFoundError("xray binary not found.")
 
                 ctx_self._proc = await asyncio.create_subprocess_exec(
-                    str(binary), "run", "-c", str(config_path),
+                    str(binary),
+                    "run",
+                    "-c",
+                    str(config_path),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
@@ -526,7 +531,10 @@ class XrayBinaryManager(XrayRunner):
                         f"xray did not start within {mgr._startup_timeout}s"
                     )
 
-                if ctx_self._proc.returncode is not None and ctx_self._proc.returncode != 0:
+                if (
+                    ctx_self._proc.returncode is not None
+                    and ctx_self._proc.returncode != 0
+                ):
                     raise RuntimeError(
                         f"xray crashed on startup (rc={ctx_self._proc.returncode})"
                     )

@@ -1,4 +1,5 @@
 """Tests for V1-Q4: layer3_cache stats in PipelineResult + clear_caches()."""
+
 from __future__ import annotations
 
 import threading
@@ -7,7 +8,6 @@ from unittest.mock import MagicMock, patch
 
 from v2ray_finder.pipeline import Pipeline, PipelineResult, StopController
 from v2ray_finder.sources import SourceEntry, SourceTrust
-
 
 VMESS = "vmess://eyJhZGQiOiIxMjcuMC4wLjEiLCJwb3J0IjoiODA4MCIsImlkIjoiZmFrZS11dWlkIn0="
 
@@ -32,6 +32,7 @@ def _pipeline_with_stub(configs=None, check_google_204=False) -> Pipeline:
 # layer3_cache absent when check_google_204=False
 # ---------------------------------------------------------------------------
 
+
 class TestLayer3CacheAbsent(unittest.TestCase):
 
     def test_no_layer3_cache_key_without_google_204(self):
@@ -47,7 +48,7 @@ class TestLayer3CacheAbsent(unittest.TestCase):
         src = _make_source()
         p = Pipeline(
             sources=[src],
-            check_health=False,   # skips _run_health entirely
+            check_health=False,  # skips _run_health entirely
             check_google_204=True,
         )
         p._fetch_all_sync = lambda stop, cb: {src.url: [VMESS]}
@@ -59,6 +60,7 @@ class TestLayer3CacheAbsent(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # layer3_cache present when check_google_204=True and health runs
 # ---------------------------------------------------------------------------
+
 
 class TestLayer3CachePresent(unittest.TestCase):
 
@@ -106,13 +108,16 @@ class TestLayer3CachePresent(unittest.TestCase):
         self.assertIn("layer3_cache", d["stats"])
 
     def test_layer3_cache_hit_rate_type(self):
-        result, _ = self._run_with_mock_l3({"hits": 0, "misses": 0, "size": 0, "hit_rate": 0.0})
+        result, _ = self._run_with_mock_l3(
+            {"hits": 0, "misses": 0, "size": 0, "hit_rate": 0.0}
+        )
         self.assertIsInstance(result.stats["layer3_cache"]["hit_rate"], float)
 
 
 # ---------------------------------------------------------------------------
 # clear_caches()
 # ---------------------------------------------------------------------------
+
 
 class TestClearCaches(unittest.TestCase):
 
@@ -122,6 +127,7 @@ class TestClearCaches(unittest.TestCase):
 
     def test_clear_caches_calls_source_cache_clear(self):
         from v2ray_finder.cache import CacheManager
+
         src = _make_source()
         p = Pipeline(sources=[src], check_health=False, cache_enabled=True)
         mock_cache = MagicMock(spec=CacheManager)
@@ -164,6 +170,7 @@ class TestClearCaches(unittest.TestCase):
 # _health_checker reuse across run() calls
 # ---------------------------------------------------------------------------
 
+
 class TestHealthCheckerReuse(unittest.TestCase):
 
     def test_health_checker_created_once_across_runs(self):
@@ -194,7 +201,8 @@ class TestHealthCheckerReuse(unittest.TestCase):
             # HealthChecker constructor called exactly once:
             # second run() reuses p._health_checker set in first run().
             self.assertEqual(
-                mock_hc_cls.call_count, 1,
+                mock_hc_cls.call_count,
+                1,
                 "HealthChecker must be instantiated only once across multiple run() calls",
             )
 
@@ -219,7 +227,8 @@ class TestHealthCheckerReuse(unittest.TestCase):
             checker_after_second = p._health_checker
 
         self.assertIs(
-            checker_after_first, checker_after_second,
+            checker_after_first,
+            checker_after_second,
             "_health_checker must be the same object after both runs",
         )
 

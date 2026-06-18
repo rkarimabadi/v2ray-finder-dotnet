@@ -50,12 +50,12 @@ try:
     )
     from rich.prompt import Confirm, IntPrompt, Prompt
     from rich.table import Table
+
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
 
 from .pipeline import Pipeline, PipelineResult, StopController
-
 
 # ---------------------------------------------------------------------------
 # Console singleton
@@ -70,6 +70,7 @@ def _print(msg: str, markup: bool = True) -> None:
         console.print(msg, markup=markup)
     else:
         import re
+
         plain = re.sub(r"\[/?[^\]]+]", "", msg)
         print(plain)
 
@@ -91,6 +92,7 @@ def _signal_handler(signum: int, frame: Any) -> None:  # noqa: ANN001
 # ---------------------------------------------------------------------------
 # Rich progress builder
 # ---------------------------------------------------------------------------
+
 
 class PipelineProgress:
     """Maps pipeline ``progress_callback`` events onto Rich Progress bars.
@@ -144,9 +146,9 @@ class PipelineProgress:
             return
 
         label_map = {
-            "fetch":  "[cyan]Fetching sources[/cyan]",
+            "fetch": "[cyan]Fetching sources[/cyan]",
             "health": "[yellow]Health checks[/yellow]",
-            "score":  "[green]Scoring[/green]",
+            "score": "[green]Scoring[/green]",
         }
         label = label_map.get(stage, stage)
 
@@ -167,11 +169,14 @@ class PipelineProgress:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def print_welcome() -> None:
     if not RICH_AVAILABLE:
         print("=== v2ray-finder (Rich Edition) ===")
         return
-    console.print(Markdown("# v2ray-finder \u2728\n**Fetch V2Ray servers from curated sources**"))
+    console.print(
+        Markdown("# v2ray-finder \u2728\n**Fetch V2Ray servers from curated sources**")
+    )
     console.print(Panel("\u2764\ufe0f for freedom", style="bold cyan", box=box.ROUNDED))
 
 
@@ -210,9 +215,9 @@ def show_stats(
         title=f"\U0001f4ca Statistics ({total} servers)",
         box=box.ROUNDED,
     )
-    table.add_column("Protocol",  style="cyan",         no_wrap=True)
-    table.add_column("Count",     justify="right",      style="green bold")
-    table.add_column("Percent",   justify="right",      style="magenta")
+    table.add_column("Protocol", style="cyan", no_wrap=True)
+    table.add_column("Count", justify="right", style="green bold")
+    table.add_column("Percent", justify="right", style="magenta")
 
     for proto, count in sorted(protocols.items(), key=lambda x: x[1], reverse=True):
         table.add_row(proto, str(count), f"{100 * count / total:.1f}%")
@@ -222,20 +227,20 @@ def show_stats(
     if result and result.stats:
         st = result.stats
         stat_rows = [
-            ("fetched",            "Raw configs fetched"),
-            ("deduped",            "After dedup"),
-            ("healthy",            "Passed health check"),
-            ("scored",             "Scored"),
+            ("fetched", "Raw configs fetched"),
+            ("deduped", "After dedup"),
+            ("healthy", "Passed health check"),
+            ("scored", "Scored"),
             ("dropped_per_source", "Dropped (per-source cap)"),
-            ("dropped_global",     "Dropped (global cap)"),
-            ("cache_hits",         "Cache hits"),
-            ("cache_misses",       "Cache misses"),
+            ("dropped_global", "Dropped (global cap)"),
+            ("cache_hits", "Cache hits"),
+            ("cache_misses", "Cache misses"),
         ]
         rows = [(label, st[key]) for key, label in stat_rows if st.get(key)]
         if rows:
             st_table = Table(title="Pipeline Stats", box=box.SIMPLE)
-            st_table.add_column("Metric",  style="cyan")
-            st_table.add_column("Value",   justify="right", style="bold")
+            st_table.add_column("Metric", style="cyan")
+            st_table.add_column("Value", justify="right", style="bold")
             for label, val in rows:
                 st_table.add_row(label, str(val))
             console.print(st_table)
@@ -243,21 +248,30 @@ def show_stats(
     # Score summary
     if result and result.scores:
         score_table = Table(title="Top 5 Servers", box=box.SIMPLE)
-        score_table.add_column("#",         style="dim",    width=3)
-        score_table.add_column("Protocol",  style="cyan")
-        score_table.add_column("Score",     justify="right", style="green bold")
-        score_table.add_column("Grade",     justify="center")
-        score_table.add_column("Config",    style="dim",    no_wrap=True)
+        score_table.add_column("#", style="dim", width=3)
+        score_table.add_column("Protocol", style="cyan")
+        score_table.add_column("Score", justify="right", style="green bold")
+        score_table.add_column("Grade", justify="center")
+        score_table.add_column("Config", style="dim", no_wrap=True)
         for i, score in enumerate(result.scores[:5], 1):
-            grade_color = {"S": "green bold", "A": "green", "B": "yellow",
-                           "C": "yellow", "D": "red", "F": "red dim"}.get(
-                               getattr(score, "grade", "F"), "dim")
+            grade_color = {
+                "S": "green bold",
+                "A": "green",
+                "B": "yellow",
+                "C": "yellow",
+                "D": "red",
+                "F": "red dim",
+            }.get(getattr(score, "grade", "F"), "dim")
             score_table.add_row(
                 str(i),
                 score.protocol,
                 f"{score.total:.1f}",
                 f"[{grade_color}]{getattr(score, 'grade', '?')}[/{grade_color}]",
-                score.config[:60] + "\u2026" if len(score.config) > 60 else score.config,
+                (
+                    score.config[:60] + "\u2026"
+                    if len(score.config) > 60
+                    else score.config
+                ),
             )
         console.print(score_table)
 
@@ -298,6 +312,7 @@ def save_results(configs: List[str], filename: str, partial: bool = False) -> No
 # Core run helper
 # ---------------------------------------------------------------------------
 
+
 def _run_pipeline(
     pipeline: Pipeline,
     stop_ctrl: StopController,
@@ -323,7 +338,9 @@ def _run_pipeline(
     configs = _configs_from_result(result, limit=limit)
 
     if stop_ctrl.is_set():
-        _print("\n[yellow]\u26a0[/yellow] [bold]Stopped by user — partial results[/bold]")
+        _print(
+            "\n[yellow]\u26a0[/yellow] [bold]Stopped by user — partial results[/bold]"
+        )
         if configs and output:
             save_results(configs, output, partial=True)
         if configs:
@@ -345,6 +362,7 @@ def _run_pipeline(
 # ---------------------------------------------------------------------------
 # Interactive TUI
 # ---------------------------------------------------------------------------
+
 
 def interactive_mode(
     github_token: Optional[str] = None,
@@ -424,14 +442,17 @@ def interactive_mode(
             if cached_result is None:
                 _print("[yellow]! No results yet. Run fetch first.[/yellow]")
             else:
-                filename = Prompt.ask("\U0001f4c1 Filename", default="v2ray_servers.txt")
-                lim      = IntPrompt.ask("\U0001f522 Limit (0 = all)", default=0)
+                filename = Prompt.ask(
+                    "\U0001f4c1 Filename", default="v2ray_servers.txt"
+                )
+                lim = IntPrompt.ask("\U0001f522 Limit (0 = all)", default=0)
                 save_results(_configs_from_result(cached_result, limit=lim), filename)
 
 
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     """Rich CLI entry point (V2-P1)."""
@@ -450,35 +471,55 @@ Examples:
   v2ray-finder-rich --cache-ttl 1800     # 30-min cache TTL
         """,
     )
-    parser.add_argument("-o", "--output",       help="output filename")
-    parser.add_argument("-l", "--limit",        type=int, default=0,
-                        help="limit number of configs (0 = all)")
-    parser.add_argument("-t", "--token",        help="GitHub token (prefer GITHUB_TOKEN env)")
-    parser.add_argument("-c", "--check-health", action="store_true",
-                        help="enable TCP health checks")
-    parser.add_argument("--check-http",         action="store_true",
-                        help="enable HTTP probe (Layer 2)")
-    parser.add_argument("--check-google-204",   action="store_true",
-                        help="enable Google-204 xray probe (Layer 3)")
-    parser.add_argument("--min-quality",        type=float, default=0.0,
-                        help="minimum quality score (0–100)")
-    parser.add_argument("--timeout",            type=float, default=5.0,
-                        help="per-server health-check timeout (s)")
-    parser.add_argument("--fetch-timeout",      type=int, default=15,
-                        help="source fetch HTTP timeout (s)")
-    parser.add_argument("--stats-only",         action="store_true",
-                        help="print stats then exit (no file written)")
-    parser.add_argument("-i", "--interactive",  action="store_true",
-                        help="force interactive TUI")
-    parser.add_argument("--cache",              action="store_true",
-                        help="enable TTL source caching")
-    parser.add_argument("--cache-backend",      default="memory",
-                        choices=["memory", "disk"],
-                        help="cache backend (default: memory)")
-    parser.add_argument("--cache-ttl",          type=int, default=3600,
-                        help="cache TTL in seconds (default: 3600)")
-    parser.add_argument("--cache-dir",          default=None,
-                        help="disk cache directory")
+    parser.add_argument("-o", "--output", help="output filename")
+    parser.add_argument(
+        "-l", "--limit", type=int, default=0, help="limit number of configs (0 = all)"
+    )
+    parser.add_argument("-t", "--token", help="GitHub token (prefer GITHUB_TOKEN env)")
+    parser.add_argument(
+        "-c", "--check-health", action="store_true", help="enable TCP health checks"
+    )
+    parser.add_argument(
+        "--check-http", action="store_true", help="enable HTTP probe (Layer 2)"
+    )
+    parser.add_argument(
+        "--check-google-204",
+        action="store_true",
+        help="enable Google-204 xray probe (Layer 3)",
+    )
+    parser.add_argument(
+        "--min-quality", type=float, default=0.0, help="minimum quality score (0–100)"
+    )
+    parser.add_argument(
+        "--timeout", type=float, default=5.0, help="per-server health-check timeout (s)"
+    )
+    parser.add_argument(
+        "--fetch-timeout", type=int, default=15, help="source fetch HTTP timeout (s)"
+    )
+    parser.add_argument(
+        "--stats-only",
+        action="store_true",
+        help="print stats then exit (no file written)",
+    )
+    parser.add_argument(
+        "-i", "--interactive", action="store_true", help="force interactive TUI"
+    )
+    parser.add_argument(
+        "--cache", action="store_true", help="enable TTL source caching"
+    )
+    parser.add_argument(
+        "--cache-backend",
+        default="memory",
+        choices=["memory", "disk"],
+        help="cache backend (default: memory)",
+    )
+    parser.add_argument(
+        "--cache-ttl",
+        type=int,
+        default=3600,
+        help="cache TTL in seconds (default: 3600)",
+    )
+    parser.add_argument("--cache-dir", default=None, help="disk cache directory")
     args = parser.parse_args()
 
     # Token resolution

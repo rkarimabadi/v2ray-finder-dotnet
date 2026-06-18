@@ -1,4 +1,5 @@
 """Core V2RayServerFinder implementation."""
+
 from __future__ import annotations
 
 import datetime
@@ -79,8 +80,8 @@ class V2RayServerFinder:
         health_timeout: float = 5.0,
         check_google_204: bool = False,
     ) -> None:
-        self._raise_errors    = raise_errors
-        self._health_timeout  = health_timeout
+        self._raise_errors = raise_errors
+        self._health_timeout = health_timeout
         self._check_google_204 = check_google_204
 
         # Use threading.Event instead of a plain bool so that
@@ -93,11 +94,13 @@ class V2RayServerFinder:
         self._last_rate_limit_info: Optional[Dict[str, Any]] = None
 
         self._session = requests.Session()
-        self._session.headers.update({
-            "User-Agent": "v2ray-finder/1.0 (github.com/alisadeghiaghili/v2ray-finder)",
-            # Tests expect the v3+json media type
-            "Accept":     "application/vnd.github.v3+json",
-        })
+        self._session.headers.update(
+            {
+                "User-Agent": "v2ray-finder/1.0 (github.com/alisadeghiaghili/v2ray-finder)",
+                # Tests expect the v3+json media type
+                "Accept": "application/vnd.github.v3+json",
+            }
+        )
 
         # Resolve token: explicit param wins, then env var
         effective_token = token or github_token or os.environ.get("GITHUB_TOKEN")
@@ -153,22 +156,24 @@ class V2RayServerFinder:
 
     def _check_rate_limit(self, response: requests.Response) -> None:
         """Inspect GitHub rate-limit headers and warn when approaching the limit."""
-        limit_raw     = response.headers.get("X-RateLimit-Limit")
+        limit_raw = response.headers.get("X-RateLimit-Limit")
         remaining_raw = response.headers.get("X-RateLimit-Remaining")
-        reset_raw     = response.headers.get("X-RateLimit-Reset")
+        reset_raw = response.headers.get("X-RateLimit-Reset")
 
         if limit_raw is None and remaining_raw is None:
             return
 
         try:
-            limit     = int(limit_raw)     if limit_raw     is not None else None
+            limit = int(limit_raw) if limit_raw is not None else None
             remaining = int(remaining_raw) if remaining_raw is not None else None
-            reset     = int(reset_raw)     if reset_raw     is not None else None
+            reset = int(reset_raw) if reset_raw is not None else None
         except (TypeError, ValueError):
             logger.debug(
                 "Malformed X-RateLimit headers — limit=%r"
                 " remaining=%r reset=%r; skipping update.",
-                limit_raw, remaining_raw, reset_raw,
+                limit_raw,
+                remaining_raw,
+                reset_raw,
             )
             # Do NOT update state when parsing fails
             return
@@ -186,7 +191,8 @@ class V2RayServerFinder:
         if remaining == 0:
             reset_dt = (
                 datetime.datetime.fromtimestamp(reset, tz=datetime.timezone.utc)
-                if reset is not None else None
+                if reset is not None
+                else None
             )
             raise GitHubRateLimitError(
                 limit=limit or 0,
@@ -199,8 +205,11 @@ class V2RayServerFinder:
                 "GitHub rate-limit low: %d/%d remaining (resets at %s).",
                 remaining,
                 limit,
-                datetime.datetime.fromtimestamp(reset, tz=datetime.timezone.utc)
-                if reset else "unknown",
+                (
+                    datetime.datetime.fromtimestamp(reset, tz=datetime.timezone.utc)
+                    if reset
+                    else "unknown"
+                ),
             )
 
     # ---------------------------------------------------------------------- #
@@ -246,7 +255,7 @@ class V2RayServerFinder:
         Returns:
             Ok(list[dict]) on success, Err(GitHubAPIError) on failure.
         """
-        url    = "https://api.github.com/search/repositories"
+        url = "https://api.github.com/search/repositories"
         params = {"q": query, "per_page": per_page, "sort": "updated"}
         try:
             resp = self._session.get(url, params=params, timeout=timeout)
@@ -321,12 +330,15 @@ class V2RayServerFinder:
             if resp.status_code == 404:
                 return Err(RepositoryNotFoundError(repo))
             if resp.status_code == 401:
-                return Err(AuthenticationError("Authentication required for this repo."))
+                return Err(
+                    AuthenticationError("Authentication required for this repo.")
+                )
             resp.raise_for_status()
             items = resp.json()
             if isinstance(items, list):
                 filtered = [
-                    item for item in items
+                    item
+                    for item in items
                     if item.get("type") == "file"
                     and os.path.splitext(item.get("name", ""))[1].lower()
                     in _CONFIG_EXTENSIONS
@@ -339,7 +351,11 @@ class V2RayServerFinder:
                     return Ok([items])
                 return Ok([])
             return Ok([])
-        except (RepositoryNotFoundError, AuthenticationError, GitHubRateLimitError) as exc:
+        except (
+            RepositoryNotFoundError,
+            AuthenticationError,
+            GitHubRateLimitError,
+        ) as exc:
             return Err(exc)
         except requests.exceptions.Timeout as exc:
             return Err(TimeoutError(f"Timeout fetching repo {repo}: {exc}"))
@@ -361,7 +377,9 @@ class V2RayServerFinder:
         if result.is_err():
             if self._raise_errors:
                 raise result.error
-            logger.debug("get_repo_files_or_empty failed for %r: %s", repo, result.error)
+            logger.debug(
+                "get_repo_files_or_empty failed for %r: %s", repo, result.error
+            )
             return []
         return result.unwrap()
 
@@ -407,7 +425,9 @@ class V2RayServerFinder:
         if result.is_err():
             if self._raise_errors:
                 raise result.error
-            logger.debug("get_servers_from_url_or_empty failed for %r: %s", url, result.error)
+            logger.debug(
+                "get_servers_from_url_or_empty failed for %r: %s", url, result.error
+            )
             return []
         return result.unwrap()
 
@@ -423,7 +443,11 @@ class V2RayServerFinder:
         progress_callback=None,
     ) -> List[str]:
         """Search GitHub and return raw config strings from discovered repos."""
-        keywords = search_keywords or ["v2ray config", "v2ray subscription", "clash config"]
+        keywords = search_keywords or [
+            "v2ray config",
+            "v2ray subscription",
+            "clash config",
+        ]
         all_servers: List[str] = []
 
         for keyword in keywords:
@@ -432,7 +456,9 @@ class V2RayServerFinder:
             try:
                 result = self.search_repos(query=keyword, per_page=max_repos)
             except KeyboardInterrupt:
-                logger.info("KeyboardInterrupt in get_servers_from_github (search) — stopping.")
+                logger.info(
+                    "KeyboardInterrupt in get_servers_from_github (search) — stopping."
+                )
                 self.request_stop()
                 break
             if result.is_err():
@@ -465,7 +491,9 @@ class V2RayServerFinder:
                     try:
                         url_result = self.get_servers_from_url(dl_url, timeout=timeout)
                     except KeyboardInterrupt:
-                        logger.info("KeyboardInterrupt in get_servers_from_github (url) — stopping.")
+                        logger.info(
+                            "KeyboardInterrupt in get_servers_from_github (url) — stopping."
+                        )
                         self.request_stop()
                         return all_servers
                     if url_result.is_ok():
@@ -499,7 +527,9 @@ class V2RayServerFinder:
             try:
                 result = self.get_servers_from_url(source.url, timeout=timeout)
             except KeyboardInterrupt:
-                logger.info("KeyboardInterrupt in get_servers_from_known_sources — stopping.")
+                logger.info(
+                    "KeyboardInterrupt in get_servers_from_known_sources — stopping."
+                )
                 self.request_stop()
                 break
             if result.is_ok():
@@ -507,7 +537,9 @@ class V2RayServerFinder:
             else:
                 if self._raise_errors:
                     raise result.error
-                logger.warning("Failed to fetch source %r: %s", source.label, result.error)
+                logger.warning(
+                    "Failed to fetch source %r: %s", source.label, result.error
+                )
 
         return servers_by_source
 
@@ -596,7 +628,9 @@ class V2RayServerFinder:
         try:
             from .health_checker import HealthChecker, filter_healthy_servers
         except (ImportError, ModuleNotFoundError):
-            logger.warning("health_checker module unavailable — returning unchecked servers.")
+            logger.warning(
+                "health_checker module unavailable — returning unchecked servers."
+            )
             return [{"config": cfg, "health_checked": False} for cfg in servers]
 
         checker = HealthChecker(
@@ -611,7 +645,7 @@ class V2RayServerFinder:
         for batch_start in range(0, len(servers), health_batch_size):
             if self.should_stop():
                 break
-            batch = servers[batch_start:batch_start + health_batch_size]
+            batch = servers[batch_start : batch_start + health_batch_size]
             try:
                 batch_results = checker.check_batch(batch)
                 all_results.extend(batch_results)
@@ -629,24 +663,28 @@ class V2RayServerFinder:
         if progress_callback:
             progress_callback(len(servers), len(servers), "Health checks complete.")
 
-        healthy = filter_healthy_servers(all_results, min_quality_score=min_quality_score)
+        healthy = filter_healthy_servers(
+            all_results, min_quality_score=min_quality_score
+        )
 
         result_dicts = []
         for h in healthy:
             src_url, src_trust = source_lookup.get(h.config, ("", 1))
             overlap = resolved_overlap_map.get(src_url, 0.0)
-            result_dicts.append({
-                "config":        h.config,
-                "protocol":      h.protocol,
-                "tcp_ok":        h.tcp_ok,
-                "http_ok":       h.http_probe_ok,
-                "google_204_ok": h.google_204_ok,
-                "latency_ms":    h.latency_ms,
-                "health_checked": True,
-                "source_url":    src_url,
-                "source_trust":  src_trust,
-                "overlap_ratio": overlap,
-            })
+            result_dicts.append(
+                {
+                    "config": h.config,
+                    "protocol": h.protocol,
+                    "tcp_ok": h.tcp_ok,
+                    "http_ok": h.http_probe_ok,
+                    "google_204_ok": h.google_204_ok,
+                    "latency_ms": h.latency_ms,
+                    "health_checked": True,
+                    "source_url": src_url,
+                    "source_trust": src_trust,
+                    "overlap_ratio": overlap,
+                }
+            )
         return result_dicts
 
     # ---------------------------------------------------------------------- #
@@ -682,12 +720,14 @@ class V2RayServerFinder:
                 (p.rstrip("://") for p in _PROTO_PREFIXES if cfg.startswith(p)),
                 "unknown",
             )
-            result.append({
-                "index": i + 1,
-                "config": cfg,
-                "protocol": proto,
-                "fetched_at": now,
-            })
+            result.append(
+                {
+                    "index": i + 1,
+                    "config": cfg,
+                    "protocol": proto,
+                    "fetched_at": now,
+                }
+            )
         return result
 
     def get_servers_sorted(

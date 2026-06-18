@@ -61,6 +61,7 @@ _GOOGLE_204_PORT = 80
 # Utility
 # ---------------------------------------------------------------------------
 
+
 def find_free_port() -> int:
     """Return an available TCP port on localhost.
 
@@ -77,6 +78,7 @@ def find_free_port() -> int:
 # ---------------------------------------------------------------------------
 # Result dataclass
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class RealHealthResult:
@@ -114,6 +116,7 @@ class RealHealthResult:
 # ---------------------------------------------------------------------------
 # Cache
 # ---------------------------------------------------------------------------
+
 
 class _ResultCache:
     """In-memory cache for connectivity check results with per-entry TTL."""
@@ -171,6 +174,7 @@ class _ResultCache:
 # ---------------------------------------------------------------------------
 # Checker
 # ---------------------------------------------------------------------------
+
 
 class RealConnectivityChecker:
     """Check real internet connectivity through xray proxies.
@@ -318,8 +322,8 @@ class RealConnectivityChecker:
                 with self._adapter.build_config_file(config, socks_port=socks_port):
                     async with self._manager.run(config, socks_port=socks_port):
                         xray_version = self._manager.get_version()
-                        reachable, latency, g204, err = await self.check_real_connectivity(
-                            config, socks_port
+                        reachable, latency, g204, err = (
+                            await self.check_real_connectivity(config, socks_port)
                         )
             except Exception as exc:
                 reachable, latency, g204, err = False, None, False, str(exc)
@@ -405,7 +409,9 @@ class RealConnectivityChecker:
         results = await asyncio.gather(*tasks)
         return list(results)
 
-    def check_server_real_sync(self, uri: str, use_cache: bool = True) -> RealHealthResult:
+    def check_server_real_sync(
+        self, uri: str, use_cache: bool = True
+    ) -> RealHealthResult:
         """Synchronous wrapper around check_server_real."""
         if use_cache and self.cache_enabled:
             cached = self._cache.get(uri)
@@ -439,9 +445,11 @@ class RealConnectivityChecker:
 # Standalone check_one (used by sync path and legacy callers)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class _LegacyResult:
     """Minimal result for check_one — consumed internally only."""
+
     config: str
     protocol: str
     reachable: bool = False
@@ -514,7 +522,8 @@ def check_one(
     xray_cfg = config_to_xray(uri, local_port=local_port)
     if xray_cfg is None:
         return _LegacyResult(
-            config=uri, protocol=protocol,
+            config=uri,
+            protocol=protocol,
             error="Could not convert URI to xray config",
         )
 
@@ -528,22 +537,30 @@ def check_one(
         retry_cfg = config_to_xray(uri, local_port=retry_port)
         if retry_cfg is None:
             return _LegacyResult(
-                config=uri, protocol=protocol,
-                error=err_msg, retried=True,
+                config=uri,
+                protocol=protocol,
+                error=err_msg,
+                retried=True,
             )
         logger.debug(
             "[check_one] xray start failed on port %d (%s); retrying on port %d.",
-            local_port, err_msg, retry_port,
+            local_port,
+            err_msg,
+            retry_port,
         )
-        retry_err, runner = _try_start_xray(retry_port, retry_cfg, binary_path, auto_download)
+        retry_err, runner = _try_start_xray(
+            retry_port, retry_cfg, binary_path, auto_download
+        )
         retried = True
         if retry_err is not None:
             logger.debug(
                 "[check_one] Retry on port %d also failed: %s.",
-                retry_port, retry_err,
+                retry_port,
+                retry_err,
             )
             return _LegacyResult(
-                config=uri, protocol=protocol,
+                config=uri,
+                protocol=protocol,
                 error=f"xray start failed: {err_msg} (retry: {retry_err})",
                 retried=True,
             )
@@ -564,8 +581,10 @@ def check_one(
         )
         g204 = ok and status == 204
         return _LegacyResult(
-            config=uri, protocol=protocol,
-            reachable=ok, google_204_ok=g204,
+            config=uri,
+            protocol=protocol,
+            reachable=ok,
+            google_204_ok=g204,
             latency_ms=latency,
             socks_port=local_port,
             retried=retried,
@@ -578,6 +597,7 @@ def check_one(
 # Batch helper (public, backward compat)
 # ---------------------------------------------------------------------------
 
+
 def check_real_connectivity_batch(
     uris: List[str],
     max_workers: int = 5,
@@ -588,6 +608,7 @@ def check_real_connectivity_batch(
 ) -> List[RealHealthResult]:
     """Run real-connectivity checks on a list of URIs concurrently."""
     import threading
+
     results: List[RealHealthResult] = []
     port_lock = threading.Lock()
     port_counter = [local_port_base]
@@ -600,13 +621,22 @@ def check_real_connectivity_batch(
 
     def _worker(uri: str) -> RealHealthResult:
         port = _get_port()
-        r = check_one(uri, local_port=port, timeout=timeout,
-                      binary_path=binary_path, auto_download=auto_download)
+        r = check_one(
+            uri,
+            local_port=port,
+            timeout=timeout,
+            binary_path=binary_path,
+            auto_download=auto_download,
+        )
         return RealHealthResult(
-            config=r.config, protocol=r.protocol,
-            reachable=r.reachable, google_204_ok=r.google_204_ok,
-            latency_ms=r.latency_ms, error=r.error,
-            socks_port=r.socks_port, retried=r.retried,
+            config=r.config,
+            protocol=r.protocol,
+            reachable=r.reachable,
+            google_204_ok=r.google_204_ok,
+            latency_ms=r.latency_ms,
+            error=r.error,
+            socks_port=r.socks_port,
+            retried=r.retried,
         )
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -616,14 +646,21 @@ def check_real_connectivity_batch(
                 results.append(fut.result())
             except Exception as exc:
                 uri = futures[fut]
-                results.append(RealHealthResult(
-                    config=uri,
-                    protocol=uri.split("://")[0] if "://" in uri else "unknown",
-                    error=str(exc),
-                ))
+                results.append(
+                    RealHealthResult(
+                        config=uri,
+                        protocol=uri.split("://")[0] if "://" in uri else "unknown",
+                        error=str(exc),
+                    )
+                )
 
-    results.sort(key=lambda r: (not r.google_204_ok, not r.reachable,
-                                r.latency_ms if r.latency_ms is not None else 9999))
+    results.sort(
+        key=lambda r: (
+            not r.google_204_ok,
+            not r.reachable,
+            r.latency_ms if r.latency_ms is not None else 9999,
+        )
+    )
     return results
 
 

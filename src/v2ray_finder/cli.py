@@ -18,10 +18,10 @@ from typing import Any, Dict, List, Optional
 from .pipeline import Pipeline, PipelineResult
 from .pipeline import StopController as PipelineStopController
 
-
 # ---------------------------------------------------------------------------
 # Helpers shared between interactive and non-interactive paths
 # ---------------------------------------------------------------------------
+
 
 def print_stats(
     servers: List,
@@ -54,10 +54,10 @@ def print_stats(
                 print(f"  {k}: {v}")
 
     if show_health and servers and isinstance(servers[0], dict):
-        healthy     = sum(1 for s in servers if s.get("health_status") == "healthy")
-        degraded    = sum(1 for s in servers if s.get("health_status") == "degraded")
+        healthy = sum(1 for s in servers if s.get("health_status") == "healthy")
+        degraded = sum(1 for s in servers if s.get("health_status") == "degraded")
         unreachable = sum(1 for s in servers if s.get("health_status") == "unreachable")
-        invalid     = sum(1 for s in servers if s.get("health_status") == "invalid")
+        invalid = sum(1 for s in servers if s.get("health_status") == "invalid")
         print("\nHealth status:")
         print(f"  Healthy:     {healthy}")
         print(f"  Degraded:    {degraded}")
@@ -65,19 +65,27 @@ def print_stats(
         print(f"  Invalid:     {invalid}")
         if healthy:
             avg_quality = (
-                sum(s.get("quality_score", 0) for s in servers
-                    if s.get("health_status") == "healthy") / healthy
+                sum(
+                    s.get("quality_score", 0)
+                    for s in servers
+                    if s.get("health_status") == "healthy"
+                )
+                / healthy
             )
             avg_latency = (
-                sum(s.get("latency_ms", 0) for s in servers
-                    if s.get("health_status") == "healthy") / healthy
+                sum(
+                    s.get("latency_ms", 0)
+                    for s in servers
+                    if s.get("health_status") == "healthy"
+                )
+                / healthy
             )
             print(f"\nAverage quality (healthy): {avg_quality:.1f}/100")
             print(f"Average latency (healthy): {avg_latency:.1f}ms")
 
     if show_xray and servers and isinstance(servers[0], dict):
         reachable = sum(1 for s in servers if s.get("reachable"))
-        g204      = sum(1 for s in servers if s.get("google_204_ok"))
+        g204 = sum(1 for s in servers if s.get("google_204_ok"))
         print("\nxray real-connectivity results:")
         print(f"  Reachable (proxy): {reachable}/{len(servers)}")
         print(f"  Google 204 OK:     {g204}/{len(servers)}")
@@ -146,20 +154,20 @@ def _run_pipeline_interactive(
     Returns the :class:`~pipeline.PipelineResult` (possibly partial if the
     user pressed Ctrl+C).
     """
-    stop_ctrl   = PipelineStopController()
+    stop_ctrl = PipelineStopController()
     orig_sigint = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, lambda _s, _f: stop_ctrl.stop())
     print("(Press Ctrl+C to stop and save partial results)")
     try:
         pipeline = Pipeline(
-            check_health      = check_health,
-            check_http_probe  = False,
-            check_google_204  = check_google_204,
-            timeout           = timeout,
-            min_quality_score = min_quality_score,
-            limit             = limit,
-            binary_path       = binary_path,
-            github_token      = token,
+            check_health=check_health,
+            check_http_probe=False,
+            check_google_204=check_google_204,
+            timeout=timeout,
+            min_quality_score=min_quality_score,
+            limit=limit,
+            binary_path=binary_path,
+            github_token=token,
         )
         return pipeline.run(stop_event=stop_ctrl.event)
     finally:
@@ -169,6 +177,7 @@ def _run_pipeline_interactive(
 # ---------------------------------------------------------------------------
 # Interactive menu (V1-A2 — now uses Pipeline)
 # ---------------------------------------------------------------------------
+
 
 def interactive_menu(token: Optional[str]) -> None:
     """Display interactive terminal menu, backed by :class:`~pipeline.Pipeline`."""
@@ -196,7 +205,9 @@ def interactive_menu(token: Optional[str]) -> None:
             print("\nFetching from known sources...")
             result = _run_pipeline_interactive(token=token)
             configs = _configs_from_result(result)
-            if result.stats.get("dropped_per_source") or result.stats.get("dropped_global"):
+            if result.stats.get("dropped_per_source") or result.stats.get(
+                "dropped_global"
+            ):
                 print(
                     f"[!] Caps applied — "
                     f"dropped {result.stats.get('dropped_per_source', 0)} per-source, "
@@ -245,7 +256,9 @@ def interactive_menu(token: Optional[str]) -> None:
         elif choice == "3":
             try:
                 limit_str = input("Limit servers to check (0 for all): ").strip()
-                xray_bin  = input("xray binary path (leave blank for auto): ").strip() or None
+                xray_bin = (
+                    input("xray binary path (leave blank for auto): ").strip() or None
+                )
             except (KeyboardInterrupt, EOFError):
                 continue
             limit = int(limit_str) if limit_str and limit_str != "0" else None
@@ -269,18 +282,18 @@ def interactive_menu(token: Optional[str]) -> None:
         # ---- 4: Save to file ----
         elif choice == "4":
             try:
-                filename     = (
+                filename = (
                     input("Filename (default: v2ray_servers.txt): ").strip()
                     or "v2ray_servers.txt"
                 )
                 check_health = input("Check health? (y/n): ").strip().lower() == "y"
-                limit_str    = input("Limit (0 for all): ").strip()
+                limit_str = input("Limit (0 for all): ").strip()
             except (KeyboardInterrupt, EOFError):
                 print("\n[!] Cancelled")
                 continue
             limit = int(limit_str) if limit_str and limit_str != "0" else None
             print(f"\nSaving to {filename}...")
-            result  = _run_pipeline_interactive(
+            result = _run_pipeline_interactive(
                 check_health=check_health,
                 limit=limit,
                 token=token,
@@ -300,7 +313,7 @@ def interactive_menu(token: Optional[str]) -> None:
             except (KeyboardInterrupt, EOFError):
                 continue
             print("\nFetching servers for statistics...")
-            result  = _run_pipeline_interactive(
+            result = _run_pipeline_interactive(
                 check_health=check_health,
                 token=token,
             )
@@ -319,6 +332,7 @@ def interactive_menu(token: Optional[str]) -> None:
 # Non-interactive pipeline runner (V1-A1)
 # ---------------------------------------------------------------------------
 
+
 def _run_pipeline(
     args: argparse.Namespace,
     token: Optional[str],
@@ -327,26 +341,26 @@ def _run_pipeline(
 
     Returns the process exit code (0 = success, 1 = error, 130 = stopped).
     """
-    stop_ctrl      = PipelineStopController()
-    orig_sigint    = signal.getsignal(signal.SIGINT)
+    stop_ctrl = PipelineStopController()
+    orig_sigint = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, lambda _s, _f: stop_ctrl.stop())
 
     if not args.quiet:
-        action      = "known sources"
+        action = "known sources"
         health_note = " with health checking" if args.check_health else ""
-        xray_note   = " with xray real-check" if args.xray_check else ""
+        xray_note = " with xray real-check" if args.xray_check else ""
         print(f"Fetching servers from {action}{health_note}{xray_note}...")
         print("[i] Press Ctrl+C at any time to stop and save partial results\n")
 
     pipeline = Pipeline(
-        check_health      = args.check_health or args.xray_check,
-        check_http_probe  = False,
-        check_google_204  = args.xray_check,
-        timeout           = args.health_timeout,
-        min_quality_score = args.min_quality,
-        limit             = args.limit,
-        binary_path       = getattr(args, "xray_binary", None),
-        github_token      = token,
+        check_health=args.check_health or args.xray_check,
+        check_http_probe=False,
+        check_google_204=args.xray_check,
+        timeout=args.health_timeout,
+        min_quality_score=args.min_quality,
+        limit=args.limit,
+        binary_path=getattr(args, "xray_binary", None),
+        github_token=token,
     )
 
     result = pipeline.run(stop_event=stop_ctrl.event)
@@ -401,17 +415,20 @@ def _run_pipeline(
 # Argument parser
 # ---------------------------------------------------------------------------
 
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Fetch and aggregate V2Ray server configs from GitHub",
         epilog="For security, use GITHUB_TOKEN environment variable instead of -t flag.",
     )
     parser.add_argument(
-        "-t", "--token",
+        "-t",
+        "--token",
         help="GitHub token (DEPRECATED: use GITHUB_TOKEN env var instead)",
     )
     parser.add_argument(
-        "--prompt-token", action="store_true",
+        "--prompt-token",
+        action="store_true",
         help="Prompt for GitHub token interactively (secure input)",
     )
     parser.add_argument("-o", "--output", help="Output filename for saving servers")
@@ -421,19 +438,26 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-q", "--quiet", action="store_true", help="Minimal output")
     parser.add_argument(
-        "-c", "--check-health", action="store_true",
+        "-c",
+        "--check-health",
+        action="store_true",
         help="Check server health (TCP connectivity and latency)",
     )
     parser.add_argument(
-        "--min-quality", type=float, default=0.0,
+        "--min-quality",
+        type=float,
+        default=0.0,
         help="Minimum quality score (0-100, default: 0)",
     )
     parser.add_argument(
-        "--health-timeout", type=float, default=5.0,
+        "--health-timeout",
+        type=float,
+        default=5.0,
         help="Health check timeout in seconds (default: 5.0)",
     )
     parser.add_argument(
-        "--xray-check", action="store_true",
+        "--xray-check",
+        action="store_true",
         help="Run real connectivity check via xray proxy (ground-truth)",
     )
     parser.add_argument(
@@ -441,7 +465,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to xray binary (auto-downloaded if not found)",
     )
     parser.add_argument(
-        "--xray-no-download", action="store_true",
+        "--xray-no-download",
+        action="store_true",
         help="Disable automatic xray binary download",
     )
     return parser
@@ -451,10 +476,11 @@ def _build_parser() -> argparse.ArgumentParser:
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     """Main CLI entry point."""
     parser = _build_parser()
-    args   = parser.parse_args()
+    args = parser.parse_args()
 
     # --- Token resolution ---
     token: Optional[str] = None
@@ -474,7 +500,9 @@ def main() -> None:
         token = token_from_env
         if not args.quiet:
             print("[i] Using GitHub token from GITHUB_TOKEN environment variable")
-    elif not token and not args.prompt_token and not any([args.output, args.stats_only]):
+    elif (
+        not token and not args.prompt_token and not any([args.output, args.stats_only])
+    ):
         token = prompt_for_token()
 
     # --- Interactive mode (V1-A2) ---

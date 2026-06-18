@@ -74,6 +74,7 @@ _LAYER3_MAX_CONCURRENT = 5
 # Shared latency → score helper (delegates to scoring_curves)
 # ---------------------------------------------------------------------------
 
+
 def _latency_to_score(latency_ms: float) -> float:
     """Piecewise-linear latency-to-score mapping (0–100).
 
@@ -114,7 +115,7 @@ class ServerHealth:
     status: HealthStatus = HealthStatus.UNREACHABLE
     host: str = ""
     port: int = 0
-    latency_ms: Optional[float] = None       # TCP latency
+    latency_ms: Optional[float] = None  # TCP latency
     tcp_ok: bool = False
     error: Optional[str] = None
     validation_error: Optional[str] = None
@@ -169,6 +170,7 @@ class ServerHealth:
 # Layer 2 helper — direct HTTP probe (no proxy)
 # ---------------------------------------------------------------------------
 
+
 def _http_direct_probe(
     host: str = _GOOGLE_204_HOST,
     port: int = _GOOGLE_204_PORT,
@@ -182,6 +184,7 @@ def _http_direct_probe(
 # ---------------------------------------------------------------------------
 # Layer 3 helper — SOCKS5 HTTP probe (through xray proxy)
 # ---------------------------------------------------------------------------
+
 
 def _socks5_http_get(
     socks_host: str,
@@ -205,6 +208,7 @@ def _socks5_http_get(
 # ---------------------------------------------------------------------------
 # ServerValidator
 # ---------------------------------------------------------------------------
+
 
 class ServerValidator:
     """Validate and parse server configs."""
@@ -232,12 +236,16 @@ class ServerValidator:
     def extract_vmess_info(cls, config: str) -> Optional[Dict]:
         """Parse vmess:// URI and return dict with host/port, or None on failure."""
         try:
-            encoded = config[len("vmess://"):]
+            encoded = config[len("vmess://") :]
             padded = encoded + "==" * (4 - len(encoded) % 4 if len(encoded) % 4 else 0)
             try:
-                data = json.loads(base64.b64decode(padded).decode("utf-8", errors="replace"))
+                data = json.loads(
+                    base64.b64decode(padded).decode("utf-8", errors="replace")
+                )
             except Exception:
-                data = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace"))
+                data = json.loads(
+                    base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
+                )
             host = data.get("add") or data.get("address") or ""
             port = int(data.get("port", 443))
             return {"host": host, "port": port, "raw": data}
@@ -248,7 +256,7 @@ class ServerValidator:
     def extract_vless_info(cls, config: str) -> Optional[Dict]:
         """Parse vless:// URI and return dict with host/port, or None on failure."""
         try:
-            rest = config[len("vless://"):]
+            rest = config[len("vless://") :]
             if "@" not in rest:
                 return None
             addr_part = rest.split("@", 1)[1]
@@ -264,7 +272,7 @@ class ServerValidator:
     def extract_trojan_info(cls, config: str) -> Optional[Dict]:
         """Parse trojan:// URI and return dict with host/port, or None on failure."""
         try:
-            rest = config[len("trojan://"):]
+            rest = config[len("trojan://") :]
             if "@" not in rest:
                 return None
             addr_part = rest.split("@", 1)[1]
@@ -280,7 +288,7 @@ class ServerValidator:
     def extract_ss_info(cls, config: str) -> Optional[Dict]:
         """Parse ss:// URI and return dict with host/port, or None on failure."""
         try:
-            rest = config[len("ss://"):]
+            rest = config[len("ss://") :]
             rest = rest.split("#")[0]
             if "@" in rest:
                 addr_part = rest.split("@", 1)[1]
@@ -294,7 +302,9 @@ class ServerValidator:
                 try:
                     decoded = base64.b64decode(padded).decode("utf-8", errors="replace")
                 except Exception:
-                    decoded = base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
+                    decoded = base64.urlsafe_b64decode(padded).decode(
+                        "utf-8", errors="replace"
+                    )
                 if "@" not in decoded:
                     return None
                 addr_part = decoded.split("@", 1)[1]
@@ -310,12 +320,14 @@ class ServerValidator:
     def extract_ssr_info(cls, config: str) -> Optional[Dict]:
         """Parse ssr:// URI and return dict with host/port/valid, or None on failure."""
         try:
-            encoded = config[len("ssr://"):]
+            encoded = config[len("ssr://") :]
             padded = encoded + "==" * (4 - len(encoded) % 4 if len(encoded) % 4 else 0)
             try:
                 decoded = base64.b64decode(padded).decode("utf-8", errors="replace")
             except Exception:
-                decoded = base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
+                decoded = base64.urlsafe_b64decode(padded).decode(
+                    "utf-8", errors="replace"
+                )
             if "/?obfsparam" in decoded or "/?" in decoded:
                 decoded = decoded.split("/?")[0]
             parts = decoded.split(":", 5)
@@ -331,7 +343,9 @@ class ServerValidator:
             return None
 
     @classmethod
-    def validate_config(cls, config: str) -> Tuple[bool, Optional[str], Optional[str], Optional[int]]:
+    def validate_config(
+        cls, config: str
+    ) -> Tuple[bool, Optional[str], Optional[str], Optional[int]]:
         """Full validation: return (is_valid, error_msg, host, port)."""
         if not config or not config.strip():
             return False, "Empty config", None, None
@@ -363,6 +377,7 @@ class ServerValidator:
 # ---------------------------------------------------------------------------
 # HealthChecker
 # ---------------------------------------------------------------------------
+
 
 class HealthChecker:
     """High-level async health checker for v2ray server configs.
@@ -416,6 +431,7 @@ class HealthChecker:
         if check_google_204:
             try:
                 from .xray_connectivity import RealConnectivityChecker
+
                 self._layer3_checker = RealConnectivityChecker(
                     timeout=timeout,
                     auto_download=False,
@@ -613,9 +629,7 @@ class HealthChecker:
         results = await asyncio.gather(*tasks)
         return [r for r in results if isinstance(r, ServerHealth)]
 
-    def check_servers(
-        self, servers: List[Tuple[str, str]]
-    ) -> List[ServerHealth]:
+    def check_servers(self, servers: List[Tuple[str, str]]) -> List[ServerHealth]:
         """Synchronous wrapper around check_servers_batch."""
         try:
             loop = asyncio.get_running_loop()
@@ -624,6 +638,7 @@ class HealthChecker:
 
         if loop is not None and loop.is_running():
             import concurrent.futures
+
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
                 future = ex.submit(asyncio.run, self.check_servers_batch(servers))
                 return future.result()
@@ -635,13 +650,14 @@ class HealthChecker:
         results = self.check_servers([(config, protocol)])
         if results:
             return results[0]
-        return ServerHealth(config=config, protocol=protocol, status=HealthStatus.INVALID)
+        return ServerHealth(
+            config=config, protocol=protocol, status=HealthStatus.INVALID
+        )
 
     def check_batch(self, configs: List[str]) -> List[ServerHealth]:
         """Run health checks on a batch of config strings (sync)."""
         pairs = [
-            (c, c.split("://")[0].lower() if "://" in c else "unknown")
-            for c in configs
+            (c, c.split("://")[0].lower() if "://" in c else "unknown") for c in configs
         ]
         return self.check_servers(pairs)
 
@@ -649,6 +665,7 @@ class HealthChecker:
 # ---------------------------------------------------------------------------
 # Public helpers
 # ---------------------------------------------------------------------------
+
 
 def filter_healthy_servers(
     results: List[ServerHealth],

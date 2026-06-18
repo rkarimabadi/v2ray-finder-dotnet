@@ -9,6 +9,7 @@ Verifies that:
 5. Successful fetches do NOT produce structured_error entries.
 6. Legacy plain-string errors (from test stubs) are normalised to dict form.
 """
+
 from __future__ import annotations
 
 import threading
@@ -19,7 +20,6 @@ from v2ray_finder.async_fetcher import AsyncFetcher, FetchResult
 from v2ray_finder.exceptions import ErrorType
 from v2ray_finder.pipeline import Pipeline, PipelineResult
 from v2ray_finder.sources import SourceEntry, SourceTrust
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -42,10 +42,12 @@ def _src(url: str) -> SourceEntry:
 # 1. FetchResult.structured_error field population
 # ---------------------------------------------------------------------------
 
+
 class TestFetchResultStructuredError(unittest.TestCase):
 
-    def _make_fr(self, success: bool, error: str, se: dict | None,
-                 status: int | None = None) -> FetchResult:
+    def _make_fr(
+        self, success: bool, error: str, se: dict | None, status: int | None = None
+    ) -> FetchResult:
         return FetchResult(
             url="http://x.example",
             content=None,
@@ -58,8 +60,12 @@ class TestFetchResultStructuredError(unittest.TestCase):
 
     def test_successful_fetch_has_no_structured_error(self):
         fr = FetchResult(
-            url=URL_A, content="vmess://abc", status_code=200,
-            success=True, error=None, elapsed_ms=10.0,
+            url=URL_A,
+            content="vmess://abc",
+            status_code=200,
+            success=True,
+            error=None,
+            elapsed_ms=10.0,
         )
         self.assertIsNone(fr.structured_error)
 
@@ -70,8 +76,13 @@ class TestFetchResultStructuredError(unittest.TestCase):
             self.assertIn(key, fr.structured_error)
 
     def test_error_type_values_are_strings(self):
-        for et in ("timeout_error", "network_error", "rate_limit_exceeded",
-                   "github_api_error", "unknown_error"):
+        for et in (
+            "timeout_error",
+            "network_error",
+            "rate_limit_exceeded",
+            "github_api_error",
+            "unknown_error",
+        ):
             se = {"error_type": et, "message": "x", "details": {}}
             fr = self._make_fr(False, "x", se)
             self.assertEqual(fr.structured_error["error_type"], et)
@@ -80,6 +91,7 @@ class TestFetchResultStructuredError(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # 2. AsyncFetcher sync path produces structured_error
 # ---------------------------------------------------------------------------
+
 
 class TestAsyncFetcherStructuredErrors(unittest.TestCase):
     """Tests the sync (requests) fallback path which is easiest to unit-test."""
@@ -91,29 +103,35 @@ class TestAsyncFetcherStructuredErrors(unittest.TestCase):
 
     def test_timeout_produces_timeout_error_type(self):
         import requests as _req
+
         f = self._fetcher()
         with patch("requests.get", side_effect=_req.exceptions.Timeout):
             results = f.fetch_many([URL_B])
         fr = results[0]
         self.assertFalse(fr.success)
         self.assertIsNotNone(fr.structured_error)
-        self.assertEqual(fr.structured_error["error_type"],
-                         ErrorType.TIMEOUT_ERROR.value)
+        self.assertEqual(
+            fr.structured_error["error_type"], ErrorType.TIMEOUT_ERROR.value
+        )
 
     def test_connection_error_produces_network_error_type(self):
         import requests as _req
+
         f = self._fetcher()
-        with patch("requests.get",
-                   side_effect=_req.exceptions.ConnectionError("refused")):
+        with patch(
+            "requests.get", side_effect=_req.exceptions.ConnectionError("refused")
+        ):
             results = f.fetch_many([URL_C])
         fr = results[0]
         self.assertFalse(fr.success)
         self.assertIsNotNone(fr.structured_error)
-        self.assertEqual(fr.structured_error["error_type"],
-                         ErrorType.NETWORK_ERROR.value)
+        self.assertEqual(
+            fr.structured_error["error_type"], ErrorType.NETWORK_ERROR.value
+        )
 
     def test_rate_limit_429_produces_rate_limit_error_type(self):
         import requests as _req
+
         mock_resp = MagicMock()
         mock_resp.status_code = 429
         f = self._fetcher()
@@ -122,22 +140,26 @@ class TestAsyncFetcherStructuredErrors(unittest.TestCase):
         fr = results[0]
         self.assertFalse(fr.success)
         self.assertIsNotNone(fr.structured_error)
-        self.assertEqual(fr.structured_error["error_type"],
-                         ErrorType.RATE_LIMIT_EXCEEDED.value)
+        self.assertEqual(
+            fr.structured_error["error_type"], ErrorType.RATE_LIMIT_EXCEEDED.value
+        )
 
     def test_403_produces_rate_limit_error_type(self):
         import requests as _req
+
         mock_resp = MagicMock()
         mock_resp.status_code = 403
         f = self._fetcher()
         with patch("requests.get", return_value=mock_resp):
             results = f.fetch_many([URL_D])
         fr = results[0]
-        self.assertEqual(fr.structured_error["error_type"],
-                         ErrorType.RATE_LIMIT_EXCEEDED.value)
+        self.assertEqual(
+            fr.structured_error["error_type"], ErrorType.RATE_LIMIT_EXCEEDED.value
+        )
 
     def test_http_500_produces_github_api_error_type(self):
         import requests as _req
+
         mock_resp = MagicMock()
         mock_resp.status_code = 500
         f = self._fetcher()
@@ -146,11 +168,13 @@ class TestAsyncFetcherStructuredErrors(unittest.TestCase):
         fr = results[0]
         self.assertFalse(fr.success)
         self.assertIsNotNone(fr.structured_error)
-        self.assertEqual(fr.structured_error["error_type"],
-                         ErrorType.GITHUB_API_ERROR.value)
+        self.assertEqual(
+            fr.structured_error["error_type"], ErrorType.GITHUB_API_ERROR.value
+        )
 
     def test_success_200_has_no_structured_error(self):
         import requests as _req
+
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.text = VMESS
@@ -166,6 +190,7 @@ class TestAsyncFetcherStructuredErrors(unittest.TestCase):
 # 3. Pipeline stats["errors"] is Dict[str, dict]
 # ---------------------------------------------------------------------------
 
+
 class TestPipelineStructuredErrors(unittest.TestCase):
 
     def _pipeline_with_stub(self, stub: dict) -> Pipeline:
@@ -178,8 +203,11 @@ class TestPipelineStructuredErrors(unittest.TestCase):
     def test_errors_key_is_dict_of_dicts(self):
         stub = {
             URL_A: [VMESS],
-            URL_B: {"error_type": "timeout_error",
-                    "message": "timed out", "details": {}},
+            URL_B: {
+                "error_type": "timeout_error",
+                "message": "timed out",
+                "details": {},
+            },
         }
         p = self._pipeline_with_stub(stub)
         result = p.run()
@@ -190,19 +218,20 @@ class TestPipelineStructuredErrors(unittest.TestCase):
 
     def test_error_payload_has_error_type_key(self):
         stub = {
-            URL_B: {"error_type": "timeout_error",
-                    "message": "timed out", "details": {}},
+            URL_B: {
+                "error_type": "timeout_error",
+                "message": "timed out",
+                "details": {},
+            },
         }
         p = self._pipeline_with_stub(stub)
         result = p.run()
-        self.assertEqual(result.stats["errors"][URL_B]["error_type"],
-                         "timeout_error")
+        self.assertEqual(result.stats["errors"][URL_B]["error_type"], "timeout_error")
 
     def test_successful_source_not_in_errors(self):
         stub = {
             URL_A: [VMESS],
-            URL_B: {"error_type": "network_error",
-                    "message": "refused", "details": {}},
+            URL_B: {"error_type": "network_error", "message": "refused", "details": {}},
         }
         p = self._pipeline_with_stub(stub)
         result = p.run()
@@ -224,26 +253,37 @@ class TestPipelineStructuredErrors(unittest.TestCase):
 # 4. PipelineResult.failed_sources / failed_source_messages
 # ---------------------------------------------------------------------------
 
+
 class TestPipelineResultFailedSources(unittest.TestCase):
 
     def _result_with_errors(self, errors: dict) -> PipelineResult:
         return PipelineResult(stats={"errors": errors})
 
     def test_failed_sources_returns_dict_of_dicts(self):
-        r = self._result_with_errors({
-            URL_B: {"error_type": "timeout_error",
-                    "message": "timed out", "details": {}},
-        })
+        r = self._result_with_errors(
+            {
+                URL_B: {
+                    "error_type": "timeout_error",
+                    "message": "timed out",
+                    "details": {},
+                },
+            }
+        )
         fs = r.failed_sources
         self.assertIsInstance(fs, dict)
         self.assertIn(URL_B, fs)
         self.assertIsInstance(fs[URL_B], dict)
 
     def test_failed_source_messages_returns_str_values(self):
-        r = self._result_with_errors({
-            URL_B: {"error_type": "timeout_error",
-                    "message": "timed out", "details": {}},
-        })
+        r = self._result_with_errors(
+            {
+                URL_B: {
+                    "error_type": "timeout_error",
+                    "message": "timed out",
+                    "details": {},
+                },
+            }
+        )
         msgs = r.failed_source_messages
         self.assertIsInstance(msgs[URL_B], str)
         self.assertEqual(msgs[URL_B], "timed out")
@@ -260,20 +300,28 @@ class TestPipelineResultFailedSources(unittest.TestCase):
 
     def test_failed_sources_excludes_plain_strings(self):
         """failed_sources only returns entries whose value is a dict."""
-        r = self._result_with_errors({
-            URL_B: {"error_type": "timeout_error", "message": "x", "details": {}},
-            URL_C: "plain string",  # legacy — should be excluded from failed_sources
-        })
+        r = self._result_with_errors(
+            {
+                URL_B: {"error_type": "timeout_error", "message": "x", "details": {}},
+                URL_C: "plain string",  # legacy — should be excluded from failed_sources
+            }
+        )
         fs = r.failed_sources
         self.assertIn(URL_B, fs)
         self.assertNotIn(URL_C, fs)
 
     def test_multiple_errors_all_present(self):
-        r = self._result_with_errors({
-            URL_B: {"error_type": "timeout_error",    "message": "t", "details": {}},
-            URL_C: {"error_type": "network_error",    "message": "n", "details": {}},
-            URL_D: {"error_type": "rate_limit_exceeded", "message": "r", "details": {}},
-        })
+        r = self._result_with_errors(
+            {
+                URL_B: {"error_type": "timeout_error", "message": "t", "details": {}},
+                URL_C: {"error_type": "network_error", "message": "n", "details": {}},
+                URL_D: {
+                    "error_type": "rate_limit_exceeded",
+                    "message": "r",
+                    "details": {},
+                },
+            }
+        )
         fs = r.failed_sources
         self.assertEqual(set(fs.keys()), {URL_B, URL_C, URL_D})
 

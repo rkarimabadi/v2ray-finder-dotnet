@@ -1,8 +1,9 @@
 """Tests for cache.py — CacheBackend, MemoryCache, DiskCache, CacheManager (V2-C1)."""
+
 from __future__ import annotations
 
-import time
 import threading
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -12,10 +13,10 @@ from v2ray_finder.cache import (
     MemoryCache,
 )
 
-
 # ---------------------------------------------------------------------------
 # MemoryCache
 # ---------------------------------------------------------------------------
+
 
 class TestMemoryCache(unittest.TestCase):
 
@@ -52,7 +53,7 @@ class TestMemoryCache(unittest.TestCase):
 
     def test_no_ttl_never_expires(self):
         c = self._cache()
-        c.set("k", "v")           # no TTL → eternal
+        c.set("k", "v")  # no TTL → eternal
         self.assertEqual(c.get("k"), "v")
 
     # -- delete --
@@ -82,18 +83,18 @@ class TestMemoryCache(unittest.TestCase):
     # -- FIFO eviction --
     def test_fifo_evicts_oldest(self):
         c = self._cache(max_size=2)
-        c.set("first",  1)
+        c.set("first", 1)
         c.set("second", 2)
-        c.set("third",  3)          # should evict "first"
+        c.set("third", 3)  # should evict "first"
         self.assertIsNone(c.get("first"))
         self.assertEqual(c.get("second"), 2)
-        self.assertEqual(c.get("third"),  3)
+        self.assertEqual(c.get("third"), 3)
 
     def test_update_existing_does_not_evict(self):
         c = self._cache(max_size=2)
         c.set("a", 1)
         c.set("b", 2)
-        c.set("a", 99)              # update, not new key — no eviction
+        c.set("a", 99)  # update, not new key — no eviction
         self.assertEqual(c.get("a"), 99)
         self.assertEqual(c.get("b"), 2)
 
@@ -121,13 +122,14 @@ class TestMemoryCache(unittest.TestCase):
 # CacheStats
 # ---------------------------------------------------------------------------
 
+
 class TestCacheStats(unittest.TestCase):
 
     def test_initial_zeros(self):
         s = CacheStats()
-        self.assertEqual(s.hits,   0)
+        self.assertEqual(s.hits, 0)
         self.assertEqual(s.misses, 0)
-        self.assertEqual(s.sets,   0)
+        self.assertEqual(s.sets, 0)
         self.assertEqual(s.errors, 0)
 
     def test_hit_rate_zero_with_no_requests(self):
@@ -158,6 +160,7 @@ class TestCacheStats(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # CacheManager — memory backend
 # ---------------------------------------------------------------------------
+
 
 class TestCacheManagerMemory(unittest.TestCase):
 
@@ -204,14 +207,14 @@ class TestCacheManagerMemory(unittest.TestCase):
         cm.set("k", "v")
         cm.get("k")
         d = cm.get_stats()
-        self.assertEqual(d["hits"],   1)
+        self.assertEqual(d["hits"], 1)
         self.assertEqual(d["misses"], 0)
-        self.assertEqual(d["sets"],   1)
+        self.assertEqual(d["sets"], 1)
 
     # -- TTL via CacheManager default --
     def test_default_ttl_used_when_none_passed(self):
         cm = CacheManager(backend="memory", ttl=1)
-        cm.set("k", "v")       # uses default ttl=1
+        cm.set("k", "v")  # uses default ttl=1
         time.sleep(1.1)
         self.assertIsNone(cm.get("k"))
 
@@ -228,8 +231,8 @@ class TestCacheManagerMemory(unittest.TestCase):
         cm.get("k")
         cm.clear()
         d = cm.get_stats()
-        self.assertEqual(d["hits"],  0)
-        self.assertEqual(d["sets"],  0)
+        self.assertEqual(d["hits"], 0)
+        self.assertEqual(d["sets"], 0)
 
     # -- delete --
     def test_delete_removes_key(self):
@@ -254,7 +257,7 @@ class TestCacheManagerMemory(unittest.TestCase):
     def test_key_is_hex_string(self):
         cm = self._cm()
         k = cm._make_key("pfx", "url")
-        int(k, 16)   # must not raise
+        int(k, 16)  # must not raise
 
     # -- cached decorator --
     def test_cached_decorator_hits_on_second_call(self):
@@ -270,7 +273,7 @@ class TestCacheManagerMemory(unittest.TestCase):
         r2 = expensive(5)
         self.assertEqual(r1, 10)
         self.assertEqual(r2, 10)
-        self.assertEqual(call_count[0], 1)   # only called once
+        self.assertEqual(call_count[0], 1)  # only called once
 
     def test_cached_decorator_different_args_call_twice(self):
         cm = self._cm()
@@ -290,10 +293,12 @@ class TestCacheManagerMemory(unittest.TestCase):
 # DiskCache — import error path
 # ---------------------------------------------------------------------------
 
+
 class TestDiskCacheImportError(unittest.TestCase):
 
     def test_raises_import_error_when_diskcache_absent(self):
         import builtins
+
         real_import = builtins.__import__
 
         def fake_import(name, *args, **kwargs):
@@ -303,6 +308,7 @@ class TestDiskCacheImportError(unittest.TestCase):
 
         with patch("builtins.__import__", side_effect=fake_import):
             from v2ray_finder.cache import DiskCache
+
             # patching the module-level flag
             with patch("v2ray_finder.cache.DISKCACHE_AVAILABLE", False):
                 with self.assertRaises(ImportError):
@@ -311,8 +317,9 @@ class TestDiskCacheImportError(unittest.TestCase):
     def test_cache_manager_falls_back_to_memory_on_disk_error(self):
         """CacheManager with backend='disk' but diskcache unavailable → memory."""
         with patch("v2ray_finder.cache.DISKCACHE_AVAILABLE", False):
-            with patch("v2ray_finder.cache.DiskCache",
-                       side_effect=ImportError("no diskcache")):
+            with patch(
+                "v2ray_finder.cache.DiskCache", side_effect=ImportError("no diskcache")
+            ):
                 cm = CacheManager(backend="disk", ttl=60)
         # After fallback we should still be able to get/set
         cm.set("k", "v")
@@ -323,11 +330,13 @@ class TestDiskCacheImportError(unittest.TestCase):
 # Pipeline cache integration (V2-C1)
 # ---------------------------------------------------------------------------
 
+
 class TestPipelineCacheIntegration(unittest.TestCase):
     """Verify that Pipeline wires CacheManager into _fetch_all_sync."""
 
     def _src(self, url="https://cache-test.example.com/sub"):
-        from v2ray_finder.sources import SourceEntry, SourceType, SourceTrust
+        from v2ray_finder.sources import SourceEntry, SourceTrust, SourceType
+
         return SourceEntry(
             url=url,
             source_type=SourceType.STATIC_SUBSCRIPTION,
@@ -340,17 +349,20 @@ class TestPipelineCacheIntegration(unittest.TestCase):
 
     def test_cache_disabled_by_default(self):
         from v2ray_finder.pipeline import Pipeline
+
         p = Pipeline(sources=[self._src()])
         self.assertIsNone(p._cache)
 
     def test_cache_enabled_creates_manager(self):
         from v2ray_finder.pipeline import Pipeline
+
         p = Pipeline(sources=[self._src()], cache_enabled=True)
         self.assertIsNotNone(p._cache)
         self.assertIsInstance(p._cache, CacheManager)
 
     def test_injected_cache_manager_used(self):
         from v2ray_finder.pipeline import Pipeline
+
         cm = CacheManager(backend="memory", ttl=60)
         p = Pipeline(sources=[self._src()], cache_manager=cm)
         self.assertIs(p._cache, cm)
@@ -358,9 +370,10 @@ class TestPipelineCacheIntegration(unittest.TestCase):
     def test_cache_hit_skips_network(self):
         """Prime cache manually → _fetch_all_sync must not call AsyncFetcher."""
         from v2ray_finder.pipeline import Pipeline
-        src  = self._src()
-        cm   = CacheManager(backend="memory", ttl=60)
-        key  = cm._make_key("source", src.url)
+
+        src = self._src()
+        cm = CacheManager(backend="memory", ttl=60)
+        key = cm._make_key("source", src.url)
         text = "\n".join([self.VMESS, self.VLESS])
         cm.set(key, text)
 
@@ -370,22 +383,27 @@ class TestPipelineCacheIntegration(unittest.TestCase):
             stop = __import__("threading").Event()
             result = p._fetch_all_sync(stop, None)
 
-        mock_af.assert_not_called()           # no network call
+        mock_af.assert_not_called()  # no network call
         self.assertIn(src.url, result)
         self.assertIn(self.VMESS, result[src.url])
 
     def test_cache_miss_stores_result(self):
         """On cache miss, successful fetch stores text in cache."""
-        from v2ray_finder.pipeline import Pipeline
         from v2ray_finder.async_fetcher import FetchResult
+        from v2ray_finder.pipeline import Pipeline
+
         src = self._src()
-        cm  = CacheManager(backend="memory", ttl=60)
-        p   = Pipeline(sources=[src], check_health=False, cache_manager=cm)
+        cm = CacheManager(backend="memory", ttl=60)
+        p = Pipeline(sources=[src], check_health=False, cache_manager=cm)
 
         text = "\n".join([self.VMESS, self.VLESS])
         fake_fr = FetchResult(
-            url=src.url, content=text, status_code=200,
-            success=True, error=None, elapsed_ms=10.0,
+            url=src.url,
+            content=text,
+            status_code=200,
+            success=True,
+            error=None,
+            elapsed_ms=10.0,
         )
         mock_fetcher = MagicMock()
         mock_fetcher.fetch_many.return_value = [fake_fr]
@@ -394,17 +412,18 @@ class TestPipelineCacheIntegration(unittest.TestCase):
             stop = __import__("threading").Event()
             p._fetch_all_sync(stop, None)
 
-        key    = cm._make_key("source", src.url)
+        key = cm._make_key("source", src.url)
         cached = cm.get(key)
         self.assertEqual(cached, text)
 
     def test_cache_stats_in_pipeline_result(self):
         """PipelineResult.stats includes cache_hits / cache_misses."""
         from v2ray_finder.pipeline import Pipeline
+
         src = self._src()
-        cm  = CacheManager(backend="memory", ttl=60)
+        cm = CacheManager(backend="memory", ttl=60)
         key = cm._make_key("source", src.url)
-        cm.set(key, self.VMESS)            # prime with 1 entry
+        cm.set(key, self.VMESS)  # prime with 1 entry
 
         p = Pipeline(sources=[src], check_health=False, cache_manager=cm)
         p._fetch_all_sync = lambda stop, cb: {src.url: [self.VMESS]}
@@ -413,17 +432,18 @@ class TestPipelineCacheIntegration(unittest.TestCase):
         cm.stats.hits = 3
         cm.stats.misses = 1
         result = p.run()
-        self.assertEqual(result.stats["cache_hits"],   3)
+        self.assertEqual(result.stats["cache_hits"], 3)
         self.assertEqual(result.stats["cache_misses"], 1)
 
     def test_run_with_cache_enabled_end_to_end(self):
         """Full run with cache_enabled=True completes without errors."""
         from v2ray_finder.pipeline import Pipeline
+
         src = self._src()
-        p   = Pipeline(sources=[src], check_health=False, cache_enabled=True)
+        p = Pipeline(sources=[src], check_health=False, cache_enabled=True)
         p._fetch_all_sync = lambda stop, cb: {src.url: [self.VMESS, self.VLESS]}
         result = p.run()
-        self.assertIn("cache_hits",   result.stats)
+        self.assertIn("cache_hits", result.stats)
         self.assertIn("cache_misses", result.stats)
 
 

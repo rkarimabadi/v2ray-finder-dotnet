@@ -27,30 +27,31 @@ from .scoring_curves import latency_to_score_1
 # ---------------------------------------------------------------------------
 
 _PROTOCOL_SCORES: Dict[str, float] = {
-    "vless":  1.0,
+    "vless": 1.0,
     "trojan": 0.95,
-    "vmess":  0.85,
-    "ss":     0.70,
-    "ssr":    0.50,
+    "vmess": 0.85,
+    "ss": 0.70,
+    "ssr": 0.50,
 }
 
 _WEIGHTS: Dict[str, float] = {
-    "latency":       0.30,
-    "reachability":  0.30,
-    "protocol":      0.10,
-    "source_trust":  0.10,
-    "freshness":     0.05,
-    "uniqueness":    0.05,
-    "google_204":    0.10,
+    "latency": 0.30,
+    "reachability": 0.30,
+    "protocol": 0.10,
+    "source_trust": 0.10,
+    "freshness": 0.05,
+    "uniqueness": 0.05,
+    "google_204": 0.10,
 }
 
-_REACH_W_TCP  = 0.70
+_REACH_W_TCP = 0.70
 _REACH_W_HTTP = 0.30
 
 
 # ---------------------------------------------------------------------------
 # Internal scoring helpers
 # ---------------------------------------------------------------------------
+
 
 def _latency_to_score(latency_ms: Optional[float]) -> float:
     return latency_to_score_1(latency_ms)
@@ -83,38 +84,42 @@ _ZERO_SCORE: "ServerScore"
 class ServerScore:
     """Scoring result for a single server."""
 
-    config:             str
-    protocol:           str
-    latency_score:      float = 0.0
+    config: str
+    protocol: str
+    latency_score: float = 0.0
     reachability_score: float = 0.0
-    protocol_score:     float = 0.0
+    protocol_score: float = 0.0
     source_trust_score: float = 0.0
-    freshness_score:    float = 0.0
-    uniqueness_score:   float = 0.0
-    google_204_score:   float = 0.0
-    latency_ms:         Optional[float] = None
-    health_details:     Dict[str, Any] = field(default_factory=dict)
+    freshness_score: float = 0.0
+    uniqueness_score: float = 0.0
+    google_204_score: float = 0.0
+    latency_ms: Optional[float] = None
+    health_details: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def total(self) -> float:
         raw = (
-            _WEIGHTS["latency"]      * self.latency_score
+            _WEIGHTS["latency"] * self.latency_score
             + _WEIGHTS["reachability"] * self.reachability_score
-            + _WEIGHTS["protocol"]     * self.protocol_score
+            + _WEIGHTS["protocol"] * self.protocol_score
             + _WEIGHTS["source_trust"] * self.source_trust_score
-            + _WEIGHTS["freshness"]    * self.freshness_score
-            + _WEIGHTS["uniqueness"]   * self.uniqueness_score
-            + _WEIGHTS["google_204"]   * self.google_204_score
+            + _WEIGHTS["freshness"] * self.freshness_score
+            + _WEIGHTS["uniqueness"] * self.uniqueness_score
+            + _WEIGHTS["google_204"] * self.google_204_score
         )
         return round(min(max(raw, 0.0), 1.0), 4)
 
     @property
     def grade(self) -> str:
         t = self.total
-        if t >= 0.80: return "A"
-        if t >= 0.60: return "B"
-        if t >= 0.40: return "C"
-        if t >= 0.20: return "D"
+        if t >= 0.80:
+            return "A"
+        if t >= 0.60:
+            return "B"
+        if t >= 0.40:
+            return "C"
+        if t >= 0.20:
+            return "D"
         return "F"
 
     # V3-A1: serialisation
@@ -125,19 +130,19 @@ class ServerScore:
         but existing keys will not be renamed or removed.
         """
         return {
-            "config":             self.config,
-            "protocol":           self.protocol,
-            "total":              self.total,
-            "grade":              self.grade,
-            "latency_ms":         self.latency_ms,
-            "latency_score":      self.latency_score,
+            "config": self.config,
+            "protocol": self.protocol,
+            "total": self.total,
+            "grade": self.grade,
+            "latency_ms": self.latency_ms,
+            "latency_score": self.latency_score,
             "reachability_score": self.reachability_score,
-            "protocol_score":     self.protocol_score,
+            "protocol_score": self.protocol_score,
             "source_trust_score": self.source_trust_score,
-            "freshness_score":    self.freshness_score,
-            "uniqueness_score":   self.uniqueness_score,
-            "google_204_score":   self.google_204_score,
-            "health_details":     self.health_details,
+            "freshness_score": self.freshness_score,
+            "uniqueness_score": self.uniqueness_score,
+            "google_204_score": self.google_204_score,
+            "health_details": self.health_details,
         }
 
     def to_json(self, indent: int = 2) -> str:
@@ -159,6 +164,7 @@ _ZERO_SCORE = ServerScore(config="", protocol="")
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def score_server(
     config: str,
     protocol: str,
@@ -172,11 +178,11 @@ def score_server(
 ) -> ServerScore:
     """Score a single server."""
     proto = protocol.lower().rstrip("/").rstrip(":")
-    ls   = _latency_to_score(latency_ms)
-    rs   = _reachability_to_score(tcp_ok, http_ok)
-    ps   = _protocol_score(proto)
-    ts   = _trust_to_score(source_trust)
-    us   = round(max(0.0, 1.0 - overlap_ratio), 6)
+    ls = _latency_to_score(latency_ms)
+    rs = _reachability_to_score(tcp_ok, http_ok)
+    ps = _protocol_score(proto)
+    ts = _trust_to_score(source_trust)
+    us = round(max(0.0, 1.0 - overlap_ratio), 6)
     g204 = 1.0 if google_204_ok else 0.0
     return ServerScore(
         config=config,
@@ -205,7 +211,7 @@ def _sort_key(s: ServerScore, descending: bool = True) -> tuple:
     Tertiary:  config string ascending (deterministic tie-break)
     """
     sign = -1 if descending else 1
-    lat  = s.latency_ms if s.latency_ms is not None else float("inf")
+    lat = s.latency_ms if s.latency_ms is not None else float("inf")
     return (sign * s.total, lat, s.config)
 
 
@@ -224,7 +230,7 @@ def score_servers(
 
     scores: List[ServerScore] = []
     for h in health_results:
-        source_url    = h.get("source_url", "")
+        source_url = h.get("source_url", "")
         overlap_ratio = h.get("overlap_ratio", overlap_map.get(source_url, 0.0))
         scores.append(
             score_server(
@@ -256,7 +262,9 @@ def sort_by_quality(
     overlap_map: Optional[Dict[str, float]] = None,
 ) -> List[Dict[str, Any]]:
     """Score health_results, sort, return enriched original dicts."""
-    scored = score_servers(health_results, overlap_map=overlap_map, descending=descending)
+    scored = score_servers(
+        health_results, overlap_map=overlap_map, descending=descending
+    )
     score_by_config = {s.config: s for s in scored}
     result = sorted(
         health_results,

@@ -1,4 +1,5 @@
 """Tests for scorer.py — to_dict/to_json (V3-A1) and deterministic sort (V3-Q3)."""
+
 from __future__ import annotations
 
 import json
@@ -12,8 +13,8 @@ from v2ray_finder.scorer import (
     sort_by_score,
 )
 
-VMESS  = "vmess://eyJhZGQiOiIxMjcuMC4wLjEifQ=="
-VLESS  = "vless://uuid@1.2.3.4:443?security=tls"
+VMESS = "vmess://eyJhZGQiOiIxMjcuMC4wLjEifQ=="
+VLESS = "vless://uuid@1.2.3.4:443?security=tls"
 TROJAN = "trojan://pass@5.6.7.8:443"
 
 
@@ -27,23 +28,35 @@ def _score(**kw) -> ServerScore:
 # V3-A1: ServerScore.to_dict / to_json
 # ---------------------------------------------------------------------------
 
+
 class TestServerScoreToDict(unittest.TestCase):
 
     def test_to_dict_contains_required_keys(self):
         s = _score(latency_ms=100)
         d = s.to_dict()
-        for key in ("config", "protocol", "total", "grade", "latency_ms",
-                    "latency_score", "reachability_score", "protocol_score",
-                    "source_trust_score", "freshness_score",
-                    "uniqueness_score", "google_204_score", "health_details"):
+        for key in (
+            "config",
+            "protocol",
+            "total",
+            "grade",
+            "latency_ms",
+            "latency_score",
+            "reachability_score",
+            "protocol_score",
+            "source_trust_score",
+            "freshness_score",
+            "uniqueness_score",
+            "google_204_score",
+            "health_details",
+        ):
             self.assertIn(key, d)
 
     def test_to_dict_values_match_properties(self):
         s = _score(latency_ms=50, tcp_ok=True)
         d = s.to_dict()
-        self.assertEqual(d["total"],   s.total)
-        self.assertEqual(d["grade"],   s.grade)
-        self.assertEqual(d["config"],  s.config)
+        self.assertEqual(d["total"], s.total)
+        self.assertEqual(d["grade"], s.grade)
+        self.assertEqual(d["config"], s.config)
         self.assertAlmostEqual(d["latency_ms"], 50)
 
     def test_to_dict_none_latency(self):
@@ -61,7 +74,7 @@ class TestServerScoreToDict(unittest.TestCase):
     def test_to_json_is_valid_json(self):
         s = _score(latency_ms=80)
         j = s.to_json()
-        parsed = json.loads(j)   # must not raise
+        parsed = json.loads(j)  # must not raise
         self.assertIsInstance(parsed, dict)
 
     def test_to_json_roundtrip_total(self):
@@ -90,18 +103,26 @@ class TestServerScoreToDict(unittest.TestCase):
 # V3-A1: PipelineResult.to_dict / to_json
 # ---------------------------------------------------------------------------
 
+
 class TestPipelineResultSerialization(unittest.TestCase):
 
     def _result(self, n=3):
         from v2ray_finder.pipeline import PipelineResult
+
         configs = [VMESS, VLESS, TROJAN][:n]
-        scores  = [score_server(c, c.split("://")[0]) for c in configs]
+        scores = [score_server(c, c.split("://")[0]) for c in configs]
         return PipelineResult(
             configs=configs,
             scores=scores,
-            stats={"fetched": n, "deduped": n, "healthy": 0,
-                   "scored": n, "cache_hits": 0, "cache_misses": 0,
-                   "errors": {}},
+            stats={
+                "fetched": n,
+                "deduped": n,
+                "healthy": 0,
+                "scored": n,
+                "cache_hits": 0,
+                "cache_misses": 0,
+                "errors": {},
+            },
         )
 
     def test_to_dict_has_required_keys(self):
@@ -137,6 +158,7 @@ class TestPipelineResultSerialization(unittest.TestCase):
 
     def test_to_json_empty_result(self):
         from v2ray_finder.pipeline import PipelineResult
+
         r = PipelineResult()
         parsed = json.loads(r.to_json())
         self.assertEqual(parsed["servers"], [])
@@ -147,6 +169,7 @@ class TestPipelineResultSerialization(unittest.TestCase):
 
     def test_failed_sources_property_from_stats(self):
         from v2ray_finder.pipeline import PipelineResult
+
         r = PipelineResult(stats={"errors": {"http://bad.example": "timeout"}})
         self.assertEqual(r.failed_sources["http://bad.example"], "timeout")
 
@@ -154,6 +177,7 @@ class TestPipelineResultSerialization(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # V3-Q3: Deterministic sort
 # ---------------------------------------------------------------------------
+
 
 class TestDeterministicSort(unittest.TestCase):
 
@@ -176,8 +200,8 @@ class TestDeterministicSort(unittest.TestCase):
         self.assertAlmostEqual(key_d[0], -key_a[0], places=6)
 
     def test_sort_key_none_latency_last(self):
-        s_none = self._s(VMESS,  latency=None)
-        s_fast = self._s(VLESS,  latency=10)
+        s_none = self._s(VMESS, latency=None)
+        s_fast = self._s(VLESS, latency=10)
         # For ascending secondary key None should sort after any real value
         self.assertGreater(_sort_key(s_none)[1], _sort_key(s_fast)[1])
 
@@ -213,8 +237,8 @@ class TestDeterministicSort(unittest.TestCase):
     # -- score_servers uses composite key --
     def test_score_servers_deterministic(self):
         health = [
-            {"config": VMESS,  "protocol": "vmess",  "latency_ms": 100},
-            {"config": VLESS,  "protocol": "vless",  "latency_ms": 50},
+            {"config": VMESS, "protocol": "vmess", "latency_ms": 100},
+            {"config": VLESS, "protocol": "vless", "latency_ms": 50},
             {"config": TROJAN, "protocol": "trojan", "latency_ms": 200},
         ]
         r1 = score_servers(health)
@@ -222,7 +246,7 @@ class TestDeterministicSort(unittest.TestCase):
         self.assertEqual([s.config for s in r1], [s.config for s in r2])
 
     def test_ascending_sort(self):
-        s1 = ServerScore(config="vmess://low",  protocol="vmess", latency_score=0.1)
+        s1 = ServerScore(config="vmess://low", protocol="vmess", latency_score=0.1)
         s2 = ServerScore(config="vmess://high", protocol="vmess", latency_score=0.9)
         result = sort_by_score([s1, s2], descending=False)
         self.assertLessEqual(result[0].total, result[1].total)
@@ -232,18 +256,24 @@ class TestDeterministicSort(unittest.TestCase):
 # V3-D3: py.typed present
 # ---------------------------------------------------------------------------
 
+
 class TestPyTyped(unittest.TestCase):
 
     def test_py_typed_marker_exists(self):
         import importlib.resources as ir
+
         import v2ray_finder
+
         try:
             # Python 3.9+
             ref = ir.files(v2ray_finder).joinpath("py.typed")
             self.assertTrue(ref.is_file())
         except AttributeError:
             # Python 3.8 fallback
-            import os, v2ray_finder as pkg
+            import os
+
+            import v2ray_finder as pkg
+
             marker = os.path.join(os.path.dirname(pkg.__file__), "py.typed")
             self.assertTrue(os.path.exists(marker))
 

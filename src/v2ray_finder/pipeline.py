@@ -115,15 +115,17 @@ _PROTO_RE = re.compile(
     re.IGNORECASE,
 )
 
-_GITHUB_HOSTS: frozenset = frozenset({
-    "api.github.com",
-    "raw.githubusercontent.com",
-})
+_GITHUB_HOSTS: frozenset = frozenset(
+    {
+        "api.github.com",
+        "raw.githubusercontent.com",
+    }
+)
 
-_DEFAULT_FETCH_CONCURRENCY       = 10
-_DEFAULT_MAX_CONFIGS_PER_SOURCE  = 5_000
-_DEFAULT_MAX_TOTAL_CONFIGS       = 50_000
-_DEFAULT_CACHE_TTL               = 3_600
+_DEFAULT_FETCH_CONCURRENCY = 10
+_DEFAULT_MAX_CONFIGS_PER_SOURCE = 5_000
+_DEFAULT_MAX_TOTAL_CONFIGS = 50_000
+_DEFAULT_CACHE_TTL = 3_600
 
 ProgressCallback = Optional[Callable[[str, int, int, str], None]]
 
@@ -142,6 +144,7 @@ def _parse_configs(text: str) -> List[str]:
 # ---------------------------------------------------------------------------
 # StopController
 # ---------------------------------------------------------------------------
+
 
 class StopController:
     """Thin wrapper around :class:`threading.Event` for pipeline cancellation."""
@@ -163,15 +166,16 @@ class StopController:
 # PipelineResult
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class PipelineResult:
     """Container for the output of a completed pipeline run."""
 
-    configs:      List[str]             = field(default_factory=list)
-    health_dicts: List[Dict[str, Any]]  = field(default_factory=list)
-    scores:       List[ServerScore]     = field(default_factory=list)
-    overlap_map:  Dict[str, float]      = field(default_factory=dict)
-    stats:        Dict[str, Any]        = field(default_factory=dict)
+    configs: List[str] = field(default_factory=list)
+    health_dicts: List[Dict[str, Any]] = field(default_factory=list)
+    scores: List[ServerScore] = field(default_factory=list)
+    overlap_map: Dict[str, float] = field(default_factory=dict)
+    stats: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def top_configs(self) -> List[str]:
@@ -194,7 +198,7 @@ class PipelineResult:
         """
         servers = [s.to_dict() for s in self.scores]
         return {
-            "stats":   self.stats,
+            "stats": self.stats,
             "servers": servers,
             "configs": [s["config"] for s in servers] if servers else self.configs,
         }
@@ -254,6 +258,7 @@ class PipelineResult:
 # Pipeline
 # ---------------------------------------------------------------------------
 
+
 class Pipeline:
     """Full discovery → fetch → dedup → health → score pipeline."""
 
@@ -279,20 +284,20 @@ class Pipeline:
         cache_dir: Optional[str] = None,
         cache_manager: Optional[CacheManager] = None,
     ) -> None:
-        self.sources                = sources or get_enabled_sources()
-        self.check_health           = check_health
-        self.check_http_probe       = check_http_probe
-        self.check_google_204       = check_google_204
-        self.timeout                = timeout
-        self.min_quality_score      = min_quality_score
-        self.health_batch_size      = health_batch_size
-        self.fetch_timeout          = fetch_timeout
-        self.fetch_concurrency      = fetch_concurrency
-        self.limit                  = limit
-        self.binary_path            = binary_path
-        self.github_token           = github_token
+        self.sources = sources or get_enabled_sources()
+        self.check_health = check_health
+        self.check_http_probe = check_http_probe
+        self.check_google_204 = check_google_204
+        self.timeout = timeout
+        self.min_quality_score = min_quality_score
+        self.health_batch_size = health_batch_size
+        self.fetch_timeout = fetch_timeout
+        self.fetch_concurrency = fetch_concurrency
+        self.limit = limit
+        self.binary_path = binary_path
+        self.github_token = github_token
         self.max_configs_per_source = max_configs_per_source
-        self.max_total_configs      = max_total_configs
+        self.max_total_configs = max_total_configs
 
         if cache_manager is not None:
             self._cache: Optional[CacheManager] = cache_manager
@@ -343,9 +348,14 @@ class Pipeline:
         _stop = stop_event or threading.Event()
         result = PipelineResult()
         stats: Dict[str, Any] = {
-            "fetched": 0, "deduped": 0, "healthy": 0, "scored": 0,
-            "dropped_per_source": 0, "dropped_global": 0,
-            "cache_hits": 0, "cache_misses": 0,
+            "fetched": 0,
+            "deduped": 0,
+            "healthy": 0,
+            "scored": 0,
+            "dropped_per_source": 0,
+            "dropped_global": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
             "errors": {},  # V1-D2: Dict[str, dict] structured error payloads
         }
 
@@ -354,7 +364,7 @@ class Pipeline:
 
         if self._cache is not None:
             cs = self._cache.get_stats()
-            stats["cache_hits"]   = cs.get("hits",   0)
+            stats["cache_hits"] = cs.get("hits", 0)
             stats["cache_misses"] = cs.get("misses", 0)
 
         for url in list(servers_by_source.keys()):
@@ -362,7 +372,8 @@ class Pipeline:
             # V1-D2: accept both structured dicts and legacy strings as errors
             if isinstance(val, (str, dict)) and not isinstance(val, list):
                 stats["errors"][url] = (
-                    val if isinstance(val, dict)
+                    val
+                    if isinstance(val, dict)
                     else {"error_type": "unknown_error", "message": val, "details": {}}
                 )
                 del servers_by_source[url]
@@ -373,7 +384,9 @@ class Pipeline:
                 stats["dropped_per_source"] += dropped
                 logger.warning(
                     "[pipeline] %s: capped at %d configs (%d dropped).",
-                    url, self.max_configs_per_source, dropped,
+                    url,
+                    self.max_configs_per_source,
+                    dropped,
                 )
 
         stats["fetched"] = sum(len(v) for v in servers_by_source.values())
@@ -392,8 +405,8 @@ class Pipeline:
         if self.limit:
             configs = configs[: self.limit]
 
-        stats["deduped"]   = len(configs)
-        result.configs     = configs
+        stats["deduped"] = len(configs)
+        result.configs = configs
         result.overlap_map = overlap_map
         if _stop.is_set():
             result.stats = stats
@@ -463,16 +476,16 @@ class Pipeline:
         config_source_map: Dict[str, str],
         overlap_map: Dict[str, float],
     ) -> Dict[str, Any]:
-        src_url   = config_source_map.get(config, "")
+        src_url = config_source_map.get(config, "")
         src_trust = self._source_trust_map.get(src_url, 1)
         proto = config.split("://")[0].lower() if "://" in config else "unknown"
         return {
-            "config":         config,
-            "protocol":       proto,
+            "config": config,
+            "protocol": proto,
             "health_checked": False,
-            "source_url":     src_url,
-            "source_trust":   src_trust,
-            "overlap_ratio":  overlap_map.get(src_url, 0.0),
+            "source_url": src_url,
+            "source_trust": src_trust,
+            "overlap_ratio": overlap_map.get(src_url, 0.0),
         }
 
     # ------------------------------------------------------------------
@@ -492,13 +505,13 @@ class Pipeline:
         progress_callback: ProgressCallback,
     ) -> Dict[str, Any]:
         """Fetch all sources with TTL cache support and GitHub rate-limit handling."""
-        github_urls     = [s.url for s in self.sources if _is_github_url(s.url)]
+        github_urls = [s.url for s in self.sources if _is_github_url(s.url)]
         non_github_urls = [s.url for s in self.sources if not _is_github_url(s.url)]
-        total           = len(self.sources)
+        total = len(self.sources)
 
         self._emit(progress_callback, "fetch", 0, total, "Starting fetch…")
 
-        base_headers   = {"User-Agent": "v2ray-finder/1.0"}
+        base_headers = {"User-Agent": "v2ray-finder/1.0"}
         github_headers = dict(base_headers)
         if self.github_token:
             github_headers["Authorization"] = f"token {self.github_token}"
@@ -509,7 +522,7 @@ class Pipeline:
         def _try_cache(url: str):
             if self._cache is None:
                 return False, None
-            key    = self._cache._make_key("source", url)
+            key = self._cache._make_key("source", url)
             cached = self._cache.get(key)
             if cached is not None:
                 return True, _parse_configs(cached)
@@ -526,8 +539,13 @@ class Pipeline:
             if hit:
                 servers_by_source[url] = configs
                 completed += 1
-                self._emit(progress_callback, "fetch", completed, total,
-                           f"Cache hit {completed}/{total}…")
+                self._emit(
+                    progress_callback,
+                    "fetch",
+                    completed,
+                    total,
+                    f"Cache hit {completed}/{total}…",
+                )
             else:
                 urls_to_fetch_ng.append(url)
 
@@ -548,13 +566,20 @@ class Pipeline:
                     servers_by_source[fr.url] = (
                         fr.structured_error
                         if fr.structured_error is not None
-                        else {"error_type": "unknown_error",
-                              "message": fr.error or "fetch failed",
-                              "details": {}}
+                        else {
+                            "error_type": "unknown_error",
+                            "message": fr.error or "fetch failed",
+                            "details": {},
+                        }
                     )
                 completed += 1
-                self._emit(progress_callback, "fetch", completed, total,
-                           f"Fetched {completed}/{total} sources…")
+                self._emit(
+                    progress_callback,
+                    "fetch",
+                    completed,
+                    total,
+                    f"Fetched {completed}/{total} sources…",
+                )
 
         # GitHub sources
         urls_to_fetch_gh: List[str] = []
@@ -563,8 +588,13 @@ class Pipeline:
             if hit:
                 servers_by_source[url] = configs
                 completed += 1
-                self._emit(progress_callback, "fetch", completed, total,
-                           f"Cache hit {completed}/{total}…")
+                self._emit(
+                    progress_callback,
+                    "fetch",
+                    completed,
+                    total,
+                    f"Cache hit {completed}/{total}…",
+                )
             else:
                 urls_to_fetch_gh.append(url)
 
@@ -579,20 +609,25 @@ class Pipeline:
                 if stop_event.is_set():
                     break
                 if github_rate_limited:
-                    logger.debug("[pipeline] Skipping %s (GitHub rate-limited).", fr.url)
+                    logger.debug(
+                        "[pipeline] Skipping %s (GitHub rate-limited).", fr.url
+                    )
                 elif fr.status_code in (403, 429):
                     logger.warning(
                         "[pipeline] GitHub rate limit on %s (HTTP %d).",
-                        fr.url, fr.status_code,
+                        fr.url,
+                        fr.status_code,
                     )
                     github_rate_limited = True
                     # V1-D2: structured rate-limit error
                     servers_by_source[fr.url] = (
                         fr.structured_error
                         if fr.structured_error is not None
-                        else {"error_type": "rate_limit_exceeded",
-                              "message": f"rate_limited:{fr.status_code}",
-                              "details": {"status_code": fr.status_code}}
+                        else {
+                            "error_type": "rate_limit_exceeded",
+                            "message": f"rate_limited:{fr.status_code}",
+                            "details": {"status_code": fr.status_code},
+                        }
                     )
                 else:
                     if fr.success and fr.content:
@@ -602,13 +637,20 @@ class Pipeline:
                         servers_by_source[fr.url] = (
                             fr.structured_error
                             if fr.structured_error is not None
-                            else {"error_type": "unknown_error",
-                                  "message": fr.error or "fetch failed",
-                                  "details": {}}
+                            else {
+                                "error_type": "unknown_error",
+                                "message": fr.error or "fetch failed",
+                                "details": {},
+                            }
                         )
                 completed += 1
-                self._emit(progress_callback, "fetch", completed, total,
-                           f"Fetched {completed}/{total} sources…")
+                self._emit(
+                    progress_callback,
+                    "fetch",
+                    completed,
+                    total,
+                    f"Fetched {completed}/{total} sources…",
+                )
 
         self._emit(progress_callback, "fetch", total, total, "Fetch complete.")
         return servers_by_source
@@ -650,15 +692,18 @@ class Pipeline:
             )
         checker = self._health_checker
 
-        total      = len(configs)
+        total = len(configs)
         all_health: list = []
 
         for batch_start in range(0, total, self.health_batch_size):
             if stop_event.is_set():
                 break
-            batch = configs[batch_start: batch_start + self.health_batch_size]
+            batch = configs[batch_start : batch_start + self.health_batch_size]
             self._emit(
-                progress_callback, "health", batch_start, total,
+                progress_callback,
+                "health",
+                batch_start,
+                total,
                 f"Health checking "
                 f"{batch_start + 1}–{min(batch_start + self.health_batch_size, total)}…",
             )
@@ -675,25 +720,27 @@ class Pipeline:
 
         result_dicts: List[Dict[str, Any]] = []
         for h in healthy:
-            src_url   = config_source_map.get(h.config, "")
+            src_url = config_source_map.get(h.config, "")
             src_trust = self._source_trust_map.get(src_url, 1)
             proto = (
                 h.config.split("://")[0].lower()
                 if "://" in h.config
                 else getattr(h, "protocol", "unknown")
             )
-            result_dicts.append({
-                "config":         h.config,
-                "protocol":       proto,
-                "tcp_ok":         h.tcp_ok,
-                "http_ok":        h.http_probe_ok,
-                "google_204_ok":  h.google_204_ok,
-                "latency_ms":     h.latency_ms,
-                "health_checked": True,
-                "source_url":     src_url,
-                "source_trust":   src_trust,
-                "overlap_ratio":  overlap_map.get(src_url, 0.0),
-            })
+            result_dicts.append(
+                {
+                    "config": h.config,
+                    "protocol": proto,
+                    "tcp_ok": h.tcp_ok,
+                    "http_ok": h.http_probe_ok,
+                    "google_204_ok": h.google_204_ok,
+                    "latency_ms": h.latency_ms,
+                    "health_checked": True,
+                    "source_url": src_url,
+                    "source_trust": src_trust,
+                    "overlap_ratio": overlap_map.get(src_url, 0.0),
+                }
+            )
         return result_dicts
 
     # ------------------------------------------------------------------

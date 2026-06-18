@@ -25,7 +25,6 @@ from v2ray_finder.normalizer import (
     normalize_server,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -62,7 +61,9 @@ def _trojan_config(
     return f"trojan://{password}@{host}:{port}?security=tls"
 
 
-def _ss_sip002(host: str = "9.10.11.12", port: int = 8388, password: str = "pass") -> str:
+def _ss_sip002(
+    host: str = "9.10.11.12", port: int = 8388, password: str = "pass"
+) -> str:
     cred = base64.b64encode(f"aes-256-gcm:{password}".encode()).decode()
     return f"ss://{cred}@{host}:{port}"
 
@@ -135,7 +136,9 @@ class TestParseVmess:
 
     def test_port_with_comma_parsed(self):
         """Some configs encode port as '443,0' — only the first part should be used."""
-        payload = json.dumps({"add": "1.2.3.4", "port": "443,0", "id": "x", "tls": "tls"})
+        payload = json.dumps(
+            {"add": "1.2.3.4", "port": "443,0", "id": "x", "tls": "tls"}
+        )
         cfg = "vmess://" + base64.b64encode(payload.encode()).decode()
         result = normalize_server(cfg)
         assert result is not None

@@ -18,7 +18,6 @@ import pytest
 
 from v2ray_finder.source_registry import SourceRegistry, SourceStats
 
-
 # ---------------------------------------------------------------------------
 # SourceStats
 # ---------------------------------------------------------------------------

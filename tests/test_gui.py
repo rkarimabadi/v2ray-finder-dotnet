@@ -5,6 +5,7 @@ CI needs:  QT_QPA_PLATFORM=offscreen  (set in conftest or env)
 """
 
 import os
+
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -17,7 +18,6 @@ from unittest.mock import MagicMock, patch  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from v2ray_finder.gui.main_window import MainWindow, WorkerThread  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

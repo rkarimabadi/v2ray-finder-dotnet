@@ -1,22 +1,22 @@
 """Tests for pipeline.Pipeline, StopController, and PipelineResult."""
+
 from __future__ import annotations
 
 import threading
 import types
 import unittest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, call, patch
 
 from v2ray_finder.pipeline import Pipeline, PipelineResult, StopController
-from v2ray_finder.sources import SourceEntry, SourceType, SourceTrust
 from v2ray_finder.scorer import ServerScore
-
+from v2ray_finder.sources import SourceEntry, SourceTrust, SourceType
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-VMESS  = "vmess://eyJhZGQiOiIxMjcuMC4wLjEiLCJwb3J0Ijo0NDMsImlkIjoiYWJjMTIzIn0="
-VLESS  = "vless://uuid@1.2.3.4:443?security=tls"
+VMESS = "vmess://eyJhZGQiOiIxMjcuMC4wLjEiLCJwb3J0Ijo0NDMsImlkIjoiYWJjMTIzIn0="
+VLESS = "vless://uuid@1.2.3.4:443?security=tls"
 TROJAN = "trojan://password@5.6.7.8:443?security=tls"
 
 SAMPLE_CONFIGS = [VMESS, VLESS, TROJAN]
@@ -42,13 +42,14 @@ class _FakeResponse:
     """Minimal requests.Response stand-in."""
 
     def __init__(self, text: str = "", status_code: int = 200):
-        self.text        = text
+        self.text = text
         self.status_code = status_code
 
 
 # ---------------------------------------------------------------------------
 # StopController
 # ---------------------------------------------------------------------------
+
 
 class TestStopController(unittest.TestCase):
 
@@ -88,6 +89,7 @@ class TestStopController(unittest.TestCase):
 # PipelineResult
 # ---------------------------------------------------------------------------
 
+
 class TestPipelineResult(unittest.TestCase):
 
     def test_defaults_are_empty(self):
@@ -99,15 +101,15 @@ class TestPipelineResult(unittest.TestCase):
         self.assertEqual(r.stats, {})
 
     def test_top_configs_returns_config_strings(self):
-        s1 = ServerScore(config=VMESS,  protocol="vmess",  latency_score=0.9)
-        s2 = ServerScore(config=VLESS,  protocol="vless",  latency_score=0.5)
+        s1 = ServerScore(config=VMESS, protocol="vmess", latency_score=0.9)
+        s2 = ServerScore(config=VLESS, protocol="vless", latency_score=0.5)
         r = PipelineResult(scores=[s1, s2])
         self.assertEqual(r.top_configs, [VMESS, VLESS])
 
     def test_top_configs_preserves_score_order(self):
         """top_configs must NOT re-sort; order is whatever scores list holds."""
-        s_low  = ServerScore(config=TROJAN, protocol="trojan", latency_score=0.1)
-        s_high = ServerScore(config=VLESS,  protocol="vless",  latency_score=0.9)
+        s_low = ServerScore(config=TROJAN, protocol="trojan", latency_score=0.1)
+        s_high = ServerScore(config=VLESS, protocol="vless", latency_score=0.9)
         r = PipelineResult(scores=[s_low, s_high])
         self.assertEqual(r.top_configs, [TROJAN, VLESS])
 
@@ -119,6 +121,7 @@ class TestPipelineResult(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Pipeline.__init__
 # ---------------------------------------------------------------------------
+
 
 class TestPipelineInit(unittest.TestCase):
 
@@ -173,6 +176,7 @@ class TestPipelineInit(unittest.TestCase):
 # Pipeline.run — high-level behaviour
 # ---------------------------------------------------------------------------
 
+
 class TestPipelineRun(unittest.TestCase):
 
     def _pipeline_with_fake_fetch(self, configs=None, check_health=False):
@@ -206,6 +210,7 @@ class TestPipelineRun(unittest.TestCase):
         p._fetch_all_sync = lambda ev, cb: {src.url: SAMPLE_CONFIGS[:]}
 
         events = []
+
         def cb(stage, current, total, msg):
             events.append((stage, current, total))
 
@@ -231,6 +236,7 @@ class TestPipelineRun(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Pipeline._fetch_all_sync
 # ---------------------------------------------------------------------------
+
 
 class TestPipelineFetchSync(unittest.TestCase):
 
@@ -262,6 +268,7 @@ class TestPipelineFetchSync(unittest.TestCase):
 
     def test_network_exception_skips_source(self):
         import requests as _req
+
         src = _make_source()
         p = self._make_pipeline([src])
         stop = threading.Event()
@@ -278,8 +285,10 @@ class TestPipelineFetchSync(unittest.TestCase):
         stop.set()
 
         called = []
-        with patch("requests.get",
-                   side_effect=lambda *a, **kw: called.append(1) or _FakeResponse()):
+        with patch(
+            "requests.get",
+            side_effect=lambda *a, **kw: called.append(1) or _FakeResponse(),
+        ):
             result = p._fetch_all_sync(stop, None)
 
         self.assertEqual(called, [])
@@ -301,6 +310,7 @@ class TestPipelineFetchSync(unittest.TestCase):
 # Async fallback when httpx absent
 # ---------------------------------------------------------------------------
 
+
 class TestPipelineFetchAsyncFallback(unittest.TestCase):
 
     def test_falls_back_to_sync_when_no_httpx(self):
@@ -313,6 +323,7 @@ class TestPipelineFetchAsyncFallback(unittest.TestCase):
         p._fetch_all_sync = MagicMock(return_value=sync_result)
 
         import builtins
+
         real_import = builtins.__import__
 
         def fake_import(name, *args, **kwargs):
@@ -331,6 +342,7 @@ class TestPipelineFetchAsyncFallback(unittest.TestCase):
 # Pipeline._run_health
 # ---------------------------------------------------------------------------
 
+
 class TestPipelineRunHealth(unittest.TestCase):
     """Tests for _run_health with the V1-C1 signature:
 
@@ -341,7 +353,7 @@ class TestPipelineRunHealth(unittest.TestCase):
 
     def _mock_health_checker(self, configs):
         """Return a mock HealthChecker that marks every config as tcp_ok."""
-        from v2ray_finder.health_checker import ServerHealth, HealthStatus
+        from v2ray_finder.health_checker import HealthStatus, ServerHealth
 
         def check_batch(batch):
             return [
@@ -364,24 +376,35 @@ class TestPipelineRunHealth(unittest.TestCase):
     def test_returns_annotated_dicts(self):
         src = _make_source()
         p = Pipeline(sources=[src], check_health=True)
-        overlap_map       = {src.url: 0.2}
+        overlap_map = {src.url: 0.2}
         config_source_map = _default_config_source_map(SAMPLE_CONFIGS, src.url)
         stop = threading.Event()
 
         mock_checker = self._mock_health_checker(SAMPLE_CONFIGS)
 
-        with patch("v2ray_finder.pipeline.HealthChecker", return_value=mock_checker), \
-             patch("v2ray_finder.pipeline.filter_healthy_servers",
-                   side_effect=lambda results, **kw: results):
+        with (
+            patch("v2ray_finder.pipeline.HealthChecker", return_value=mock_checker),
+            patch(
+                "v2ray_finder.pipeline.filter_healthy_servers",
+                side_effect=lambda results, **kw: results,
+            ),
+        ):
             dicts = p._run_health(
                 SAMPLE_CONFIGS[:], config_source_map, overlap_map, stop, None
             )
 
         self.assertEqual(len(dicts), len(SAMPLE_CONFIGS))
         required_keys = {
-            "config", "protocol", "tcp_ok", "http_ok",
-            "google_204_ok", "latency_ms", "health_checked",
-            "source_url", "source_trust", "overlap_ratio",
+            "config",
+            "protocol",
+            "tcp_ok",
+            "http_ok",
+            "google_204_ok",
+            "latency_ms",
+            "health_checked",
+            "source_url",
+            "source_trust",
+            "overlap_ratio",
         }
         for d in dicts:
             self.assertTrue(
@@ -392,17 +415,19 @@ class TestPipelineRunHealth(unittest.TestCase):
     def test_health_checked_flag_is_true(self):
         src = _make_source()
         p = Pipeline(sources=[src])
-        overlap_map       = {src.url: 0.0}
+        overlap_map = {src.url: 0.0}
         config_source_map = _default_config_source_map([VLESS], src.url)
         stop = threading.Event()
 
         mock_checker = self._mock_health_checker([VLESS])
-        with patch("v2ray_finder.pipeline.HealthChecker", return_value=mock_checker), \
-             patch("v2ray_finder.pipeline.filter_healthy_servers",
-                   side_effect=lambda results, **kw: results):
-            dicts = p._run_health(
-                [VLESS], config_source_map, overlap_map, stop, None
-            )
+        with (
+            patch("v2ray_finder.pipeline.HealthChecker", return_value=mock_checker),
+            patch(
+                "v2ray_finder.pipeline.filter_healthy_servers",
+                side_effect=lambda results, **kw: results,
+            ),
+        ):
+            dicts = p._run_health([VLESS], config_source_map, overlap_map, stop, None)
 
         self.assertTrue(dicts[0]["health_checked"])
 
@@ -410,21 +435,25 @@ class TestPipelineRunHealth(unittest.TestCase):
         """Each health dict must carry source_url and source_trust from config_source_map."""
         src = _make_source()
         p = Pipeline(sources=[src], check_health=True)
-        overlap_map       = {src.url: 0.3}
+        overlap_map = {src.url: 0.3}
         config_source_map = _default_config_source_map(SAMPLE_CONFIGS, src.url)
         stop = threading.Event()
 
         mock_checker = self._mock_health_checker(SAMPLE_CONFIGS)
-        with patch("v2ray_finder.pipeline.HealthChecker", return_value=mock_checker), \
-             patch("v2ray_finder.pipeline.filter_healthy_servers",
-                   side_effect=lambda results, **kw: results):
+        with (
+            patch("v2ray_finder.pipeline.HealthChecker", return_value=mock_checker),
+            patch(
+                "v2ray_finder.pipeline.filter_healthy_servers",
+                side_effect=lambda results, **kw: results,
+            ),
+        ):
             dicts = p._run_health(
                 SAMPLE_CONFIGS[:], config_source_map, overlap_map, stop, None
             )
 
         for d in dicts:
-            self.assertEqual(d["source_url"],   src.url)
-            self.assertEqual(d["source_trust"],  SourceTrust.HIGH.value)
+            self.assertEqual(d["source_url"], src.url)
+            self.assertEqual(d["source_trust"], SourceTrust.HIGH.value)
             self.assertAlmostEqual(d["overlap_ratio"], 0.3)
 
     def test_unknown_config_source_defaults_to_empty(self):
@@ -433,23 +462,27 @@ class TestPipelineRunHealth(unittest.TestCase):
         p = Pipeline(sources=[src], check_health=True)
         # Intentionally empty map — simulates a config that slipped through
         config_source_map = {}
-        overlap_map       = {}
+        overlap_map = {}
         stop = threading.Event()
 
         mock_checker = self._mock_health_checker([VLESS])
-        with patch("v2ray_finder.pipeline.HealthChecker", return_value=mock_checker), \
-             patch("v2ray_finder.pipeline.filter_healthy_servers",
-                   side_effect=lambda results, **kw: results):
+        with (
+            patch("v2ray_finder.pipeline.HealthChecker", return_value=mock_checker),
+            patch(
+                "v2ray_finder.pipeline.filter_healthy_servers",
+                side_effect=lambda results, **kw: results,
+            ),
+        ):
             dicts = p._run_health([VLESS], config_source_map, overlap_map, stop, None)
 
-        self.assertEqual(dicts[0]["source_url"],  "")
+        self.assertEqual(dicts[0]["source_url"], "")
         self.assertEqual(dicts[0]["source_trust"], 1)
 
     def test_stop_event_cancels_remaining_batches(self):
         src = _make_source()
         # health_batch_size=1 so each config is its own batch
         p = Pipeline(sources=[src], health_batch_size=1)
-        overlap_map       = {src.url: 0.0}
+        overlap_map = {src.url: 0.0}
         config_source_map = _default_config_source_map(SAMPLE_CONFIGS, src.url)
         stop = threading.Event()
 
@@ -458,22 +491,31 @@ class TestPipelineRunHealth(unittest.TestCase):
         def check_batch(batch):
             call_count[0] += 1
             stop.set()  # signal stop after first batch
-            from v2ray_finder.health_checker import ServerHealth, HealthStatus
-            return [ServerHealth(
-                config=batch[0], protocol="vless",
-                status=HealthStatus.HEALTHY, tcp_ok=True,
-                http_probe_ok=False, google_204_ok=False, latency_ms=10.0,
-            )]
+            from v2ray_finder.health_checker import HealthStatus, ServerHealth
+
+            return [
+                ServerHealth(
+                    config=batch[0],
+                    protocol="vless",
+                    status=HealthStatus.HEALTHY,
+                    tcp_ok=True,
+                    http_probe_ok=False,
+                    google_204_ok=False,
+                    latency_ms=10.0,
+                )
+            ]
 
         mock_checker = MagicMock()
         mock_checker.check_batch.side_effect = check_batch
 
-        with patch("v2ray_finder.pipeline.HealthChecker", return_value=mock_checker), \
-             patch("v2ray_finder.pipeline.filter_healthy_servers",
-                   side_effect=lambda results, **kw: results):
-            p._run_health(
-                SAMPLE_CONFIGS[:], config_source_map, overlap_map, stop, None
-            )
+        with (
+            patch("v2ray_finder.pipeline.HealthChecker", return_value=mock_checker),
+            patch(
+                "v2ray_finder.pipeline.filter_healthy_servers",
+                side_effect=lambda results, **kw: results,
+            ),
+        ):
+            p._run_health(SAMPLE_CONFIGS[:], config_source_map, overlap_map, stop, None)
 
         # Only the first batch should have run
         self.assertEqual(call_count[0], 1)
@@ -483,9 +525,13 @@ class TestPipelineRunHealth(unittest.TestCase):
         p = Pipeline(sources=[src])
         mock_checker = MagicMock()
         mock_checker.check_batch.return_value = []
-        with patch("v2ray_finder.pipeline.HealthChecker", return_value=mock_checker), \
-             patch("v2ray_finder.pipeline.filter_healthy_servers",
-                   side_effect=lambda results, **kw: results):
+        with (
+            patch("v2ray_finder.pipeline.HealthChecker", return_value=mock_checker),
+            patch(
+                "v2ray_finder.pipeline.filter_healthy_servers",
+                side_effect=lambda results, **kw: results,
+            ),
+        ):
             dicts = p._run_health([], {}, {}, threading.Event(), None)
         self.assertEqual(dicts, [])
 
@@ -494,12 +540,14 @@ class TestPipelineRunHealth(unittest.TestCase):
 # Pipeline._emit
 # ---------------------------------------------------------------------------
 
+
 class TestPipelineEmit(unittest.TestCase):
 
     def test_emit_calls_callback(self):
         calls = []
-        Pipeline._emit(lambda s, c, t, m: calls.append((s, c, t, m)),
-                       "fetch", 1, 10, "hello")
+        Pipeline._emit(
+            lambda s, c, t, m: calls.append((s, c, t, m)), "fetch", 1, 10, "hello"
+        )
         self.assertEqual(calls, [("fetch", 1, 10, "hello")])
 
     def test_emit_none_callback_safe(self):
@@ -508,6 +556,7 @@ class TestPipelineEmit(unittest.TestCase):
     def test_emit_callback_exception_suppressed(self):
         def bad_cb(*a):
             raise RuntimeError("oops")
+
         Pipeline._emit(bad_cb, "score", 0, 1, "msg")
 
     def test_emit_stage_values(self):
@@ -522,20 +571,21 @@ class TestPipelineEmit(unittest.TestCase):
 # Integration: full Pipeline.run() round-trip
 # ---------------------------------------------------------------------------
 
+
 class TestPipelineIntegration(unittest.TestCase):
 
     def _make_health_result(self, config: str) -> dict:
         return {
-            "config":         config,
-            "protocol":       "vless",
-            "tcp_ok":         True,
-            "http_ok":        False,
-            "google_204_ok":  False,
-            "latency_ms":     100.0,
+            "config": config,
+            "protocol": "vless",
+            "tcp_ok": True,
+            "http_ok": False,
+            "google_204_ok": False,
+            "latency_ms": 100.0,
             "health_checked": True,
-            "source_url":     SRC_URL,
-            "source_trust":   3,
-            "overlap_ratio":  0.1,
+            "source_url": SRC_URL,
+            "source_trust": 3,
+            "overlap_ratio": 0.1,
         }
 
     def test_full_run_produces_sorted_scores(self):
@@ -544,15 +594,18 @@ class TestPipelineIntegration(unittest.TestCase):
         p = Pipeline(sources=[src], check_health=True, health_batch_size=100)
         p._fetch_all_sync = lambda ev, cb: {src.url: SAMPLE_CONFIGS[:]}
 
-        from v2ray_finder.health_checker import ServerHealth, HealthStatus
+        from v2ray_finder.health_checker import HealthStatus, ServerHealth
 
         def fake_check_batch(batch):
             return [
                 ServerHealth(
-                    config=c, protocol="vless",
+                    config=c,
+                    protocol="vless",
                     status=HealthStatus.HEALTHY,
-                    tcp_ok=True, http_probe_ok=False,
-                    google_204_ok=False, latency_ms=100.0,
+                    tcp_ok=True,
+                    http_probe_ok=False,
+                    google_204_ok=False,
+                    latency_ms=100.0,
                 )
                 for c in batch
             ]
@@ -560,9 +613,13 @@ class TestPipelineIntegration(unittest.TestCase):
         mock_checker = MagicMock()
         mock_checker.check_batch.side_effect = fake_check_batch
 
-        with patch("v2ray_finder.pipeline.HealthChecker", return_value=mock_checker), \
-             patch("v2ray_finder.pipeline.filter_healthy_servers",
-                   side_effect=lambda results, **kw: results):
+        with (
+            patch("v2ray_finder.pipeline.HealthChecker", return_value=mock_checker),
+            patch(
+                "v2ray_finder.pipeline.filter_healthy_servers",
+                side_effect=lambda results, **kw: results,
+            ),
+        ):
             result = p.run()
 
         self.assertIsInstance(result, PipelineResult)
@@ -602,22 +659,27 @@ class TestPipelineIntegration(unittest.TestCase):
 # __init__ exports
 # ---------------------------------------------------------------------------
 
+
 class TestInitExports(unittest.TestCase):
 
     def test_pipeline_importable_from_package(self):
         import v2ray_finder
+
         self.assertTrue(hasattr(v2ray_finder, "Pipeline"))
 
     def test_stop_controller_importable_from_package(self):
         import v2ray_finder
+
         self.assertTrue(hasattr(v2ray_finder, "StopController"))
 
     def test_pipeline_result_importable_from_package(self):
         import v2ray_finder
+
         self.assertTrue(hasattr(v2ray_finder, "PipelineResult"))
 
     def test_version_bumped(self):
         import v2ray_finder
+
         major, minor, *_ = v2ray_finder.__version__.split(".")
         self.assertEqual(major, "0")
         self.assertGreaterEqual(int(minor), 6)
@@ -625,9 +687,11 @@ class TestInitExports(unittest.TestCase):
 
 # ---------------------------------------------------------------------------
 
+
 def _parse_inline(text: str):
     """Minimal inline config parser for test stubs."""
     import re
+
     _RE = re.compile(
         r"(?:vmess|vless|trojan|ss|ssr)://[A-Za-z0-9+/=_\-@:.?&#%]+",
         re.IGNORECASE,

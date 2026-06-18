@@ -1,17 +1,17 @@
 """Tests for CLI paths that use Pipeline (V1-A1 non-interactive, V1-A2 interactive)."""
+
 from __future__ import annotations
 
 import sys
 import unittest
 from io import StringIO
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, call, patch
 
 from v2ray_finder.pipeline import PipelineResult, StopController
 from v2ray_finder.scorer import ServerScore
 
-
-VMESS  = "vmess://eyJhZGQiOiIxMjcuMC4wLjEiLCJwb3J0Ijo0NDMsImlkIjoiYWJjMTIzIn0="
-VLESS  = "vless://uuid@1.2.3.4:443?security=tls"
+VMESS = "vmess://eyJhZGQiOiIxMjcuMC4wLjEiLCJwb3J0Ijo0NDMsImlkIjoiYWJjMTIzIn0="
+VLESS = "vless://uuid@1.2.3.4:443?security=tls"
 TROJAN = "trojan://password@5.6.7.8:443?security=tls"
 SAMPLE = [VMESS, VLESS, TROJAN]
 
@@ -28,14 +28,18 @@ def _make_result(configs=None, scores=None, stats=None):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _run_main(*argv):
     """Run cli.main() with patched sys.argv; return (stdout, exit_code)."""
     from v2ray_finder import cli
+
     buf = StringIO()
     exit_code = 0
-    with patch("sys.argv", ["v2ray-finder"] + list(argv)), \
-         patch("sys.stdout", buf), \
-         patch("sys.stderr", StringIO()):
+    with (
+        patch("sys.argv", ["v2ray-finder"] + list(argv)),
+        patch("sys.stdout", buf),
+        patch("sys.stderr", StringIO()),
+    ):
         try:
             cli.main()
         except SystemExit as exc:
@@ -47,10 +51,12 @@ def _run_main(*argv):
 # Non-interactive path (V1-A1)
 # ---------------------------------------------------------------------------
 
+
 class TestCLIPipelineNonInteractive(unittest.TestCase):
 
     def _patch_pipeline(self, result=None):
         from v2ray_finder import pipeline as _pl
+
         return patch.object(_pl.Pipeline, "run", return_value=result or _make_result())
 
     # -- --stats-only --
@@ -66,7 +72,9 @@ class TestCLIPipelineNonInteractive(unittest.TestCase):
 
     # -- --output --
     def test_output_writes_file(self, tmp_path=None):
-        import tempfile, os
+        import os
+        import tempfile
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
             fname = f.name
         try:
@@ -81,7 +89,9 @@ class TestCLIPipelineNonInteractive(unittest.TestCase):
 
     # -- limit --
     def test_limit_truncates_output(self):
-        import tempfile, os
+        import os
+        import tempfile
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
             fname = f.name
         try:
@@ -103,7 +113,9 @@ class TestCLIPipelineNonInteractive(unittest.TestCase):
             return _make_result()
 
         with patch.object(_pl.Pipeline, "run", fake_run):
-            import tempfile, os
+            import os
+            import tempfile
+
             with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
                 fname = f.name
             try:
@@ -120,10 +132,12 @@ class TestCLIPipelineNonInteractive(unittest.TestCase):
 
     # -- top_configs used when scores present --
     def test_uses_top_configs_when_scores_present(self):
-        import tempfile, os
+        import os
+        import tempfile
+
         scores = [
-            ServerScore(config=VMESS,  protocol="vmess",  latency_score=0.9),
-            ServerScore(config=VLESS,  protocol="vless",  latency_score=0.5),
+            ServerScore(config=VMESS, protocol="vmess", latency_score=0.9),
+            ServerScore(config=VLESS, protocol="vless", latency_score=0.5),
         ]
         result = _make_result(configs=[TROJAN], scores=scores)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
@@ -143,10 +157,12 @@ class TestCLIPipelineNonInteractive(unittest.TestCase):
 # print_stats helper
 # ---------------------------------------------------------------------------
 
+
 class TestPrintStats(unittest.TestCase):
 
     def _capture(self, *args, **kwargs):
         from v2ray_finder.cli import print_stats
+
         buf = StringIO()
         with patch("sys.stdout", buf):
             print_stats(*args, **kwargs)
@@ -168,10 +184,20 @@ class TestPrintStats(unittest.TestCase):
 
     def test_health_stats_shown_for_dicts(self):
         servers = [
-            {"config": VMESS,   "protocol": "vmess",   "health_status": "healthy",
-             "quality_score": 80, "latency_ms": 50},
-            {"config": VLESS,   "protocol": "vless",   "health_status": "unreachable",
-             "quality_score": 0,  "latency_ms": 0},
+            {
+                "config": VMESS,
+                "protocol": "vmess",
+                "health_status": "healthy",
+                "quality_score": 80,
+                "latency_ms": 50,
+            },
+            {
+                "config": VLESS,
+                "protocol": "vless",
+                "health_status": "unreachable",
+                "quality_score": 0,
+                "latency_ms": 0,
+            },
         ]
         out = self._capture(servers, show_health=True)
         self.assertIn("Healthy", out)
@@ -195,8 +221,13 @@ class TestPrintStats(unittest.TestCase):
 
     def test_xray_stats_shown(self):
         servers = [
-            {"config": VMESS, "protocol": "vmess",
-             "reachable": True, "google_204_ok": True, "latency_ms": 120},
+            {
+                "config": VMESS,
+                "protocol": "vmess",
+                "reachable": True,
+                "google_204_ok": True,
+                "latency_ms": 120,
+            },
         ]
         out = self._capture(servers, show_xray=True)
         self.assertIn("Reachable", out)
@@ -207,11 +238,15 @@ class TestPrintStats(unittest.TestCase):
 # save_results helper
 # ---------------------------------------------------------------------------
 
+
 class TestSaveResults(unittest.TestCase):
 
     def test_saves_config_strings(self):
-        import tempfile, os
+        import os
+        import tempfile
+
         from v2ray_finder.cli import save_results
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
             fname = f.name
         try:
@@ -224,14 +259,18 @@ class TestSaveResults(unittest.TestCase):
 
     def test_empty_list_prints_message(self):
         from v2ray_finder.cli import save_results
+
         buf = StringIO()
         with patch("sys.stdout", buf):
             save_results([], "ignored.txt")
         self.assertIn("No servers", buf.getvalue())
 
     def test_partial_flag_adds_label(self):
-        import tempfile, os
+        import os
+        import tempfile
+
         from v2ray_finder.cli import save_results
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
             fname = f.name
         try:
@@ -247,23 +286,32 @@ class TestSaveResults(unittest.TestCase):
 # V1-C3 / V1-C4 cap integration via Pipeline init
 # ---------------------------------------------------------------------------
 
+
 class TestPipelineCapIntegration(unittest.TestCase):
     """Verify cap params reach Pipeline.__init__ from both find_servers and CLI."""
 
     def test_find_servers_max_configs_per_source_forwarded(self):
         from v2ray_finder import pipeline as _pl
-        with patch.object(_pl.Pipeline, "__init__", return_value=None) as mock_init, \
-             patch.object(_pl.Pipeline, "run",   return_value=PipelineResult()):
+
+        with (
+            patch.object(_pl.Pipeline, "__init__", return_value=None) as mock_init,
+            patch.object(_pl.Pipeline, "run", return_value=PipelineResult()),
+        ):
             import v2ray_finder
+
             v2ray_finder.find_servers(max_configs_per_source=999, check_health=False)
             _, kw = mock_init.call_args
             self.assertEqual(kw.get("max_configs_per_source"), 999)
 
     def test_find_servers_max_total_configs_forwarded(self):
         from v2ray_finder import pipeline as _pl
-        with patch.object(_pl.Pipeline, "__init__", return_value=None) as mock_init, \
-             patch.object(_pl.Pipeline, "run",   return_value=PipelineResult()):
+
+        with (
+            patch.object(_pl.Pipeline, "__init__", return_value=None) as mock_init,
+            patch.object(_pl.Pipeline, "run", return_value=PipelineResult()),
+        ):
             import v2ray_finder
+
             v2ray_finder.find_servers(max_total_configs=12345, check_health=False)
             _, kw = mock_init.call_args
             self.assertEqual(kw.get("max_total_configs"), 12345)

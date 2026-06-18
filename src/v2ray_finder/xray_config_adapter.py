@@ -87,6 +87,7 @@ class ConfigAdapter:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _socks_inbound(local_port: int) -> Dict:
     return {
         "listen": "127.0.0.1",
@@ -162,21 +163,25 @@ def _stream_settings_qs(qs: dict, parsed: Any) -> Dict:
 
 
 def _build_vmess(uri: str, local_port: int) -> Dict:
-    encoded = uri[len("vmess://"):]
+    encoded = uri[len("vmess://") :]
     padded = encoded + "=" * (-len(encoded) % 4)
     info = json.loads(base64.urlsafe_b64decode(padded))
     outbound = {
         "protocol": "vmess",
         "settings": {
-            "vnext": [{
-                "address": info.get("add") or info.get("addr", ""),
-                "port": int(info.get("port", 443)),
-                "users": [{
-                    "id": info.get("id", ""),
-                    "alterId": int(info.get("aid", 0)),
-                    "security": info.get("scy", "auto"),
-                }],
-            }]
+            "vnext": [
+                {
+                    "address": info.get("add") or info.get("addr", ""),
+                    "port": int(info.get("port", 443)),
+                    "users": [
+                        {
+                            "id": info.get("id", ""),
+                            "alterId": int(info.get("aid", 0)),
+                            "security": info.get("scy", "auto"),
+                        }
+                    ],
+                }
+            ]
         },
         "streamSettings": _stream_settings_vmess(info),
     }
@@ -189,15 +194,19 @@ def _build_vless(uri: str, local_port: int) -> Dict:
     outbound = {
         "protocol": "vless",
         "settings": {
-            "vnext": [{
-                "address": parsed.hostname or "",
-                "port": parsed.port or 443,
-                "users": [{
-                    "id": parsed.username or "",
-                    "encryption": qs.get("encryption", ["none"])[0],
-                    "flow": qs.get("flow", [""])[0],
-                }],
-            }]
+            "vnext": [
+                {
+                    "address": parsed.hostname or "",
+                    "port": parsed.port or 443,
+                    "users": [
+                        {
+                            "id": parsed.username or "",
+                            "encryption": qs.get("encryption", ["none"])[0],
+                            "flow": qs.get("flow", [""])[0],
+                        }
+                    ],
+                }
+            ]
         },
         "streamSettings": _stream_settings_qs(qs, parsed),
     }
@@ -210,11 +219,13 @@ def _build_trojan(uri: str, local_port: int) -> Dict:
     outbound = {
         "protocol": "trojan",
         "settings": {
-            "servers": [{
-                "address": parsed.hostname or "",
-                "port": parsed.port or 443,
-                "password": unquote(parsed.username or ""),
-            }]
+            "servers": [
+                {
+                    "address": parsed.hostname or "",
+                    "port": parsed.port or 443,
+                    "password": unquote(parsed.username or ""),
+                }
+            ]
         },
         "streamSettings": _stream_settings_qs(qs, parsed),
     }
@@ -222,16 +233,14 @@ def _build_trojan(uri: str, local_port: int) -> Dict:
 
 
 def _build_ss(uri: str, local_port: int) -> Dict:
-    rest = uri[len("ss://"):]
+    rest = uri[len("ss://") :]
     if "#" in rest:
         rest = rest.split("#", 1)[0]
 
     if "@" in rest:
         userinfo, hostinfo = rest.rsplit("@", 1)
         try:
-            decoded = base64.b64decode(
-                userinfo + "=" * (-len(userinfo) % 4)
-            ).decode()
+            decoded = base64.b64decode(userinfo + "=" * (-len(userinfo) % 4)).decode()
             method, password = (
                 decoded.split(":", 1) if ":" in decoded else (decoded, "")
             )
@@ -252,18 +261,18 @@ def _build_ss(uri: str, local_port: int) -> Dict:
         else:
             raise ValueError(f"Cannot parse Shadowsocks URI: {uri!r}")
 
-    host, port_s = (
-        hostinfo.rsplit(":", 1) if ":" in hostinfo else (hostinfo, "8388")
-    )
+    host, port_s = hostinfo.rsplit(":", 1) if ":" in hostinfo else (hostinfo, "8388")
     outbound = {
         "protocol": "shadowsocks",
         "settings": {
-            "servers": [{
-                "address": host,
-                "port": int(port_s),
-                "method": method,
-                "password": password,
-            }]
+            "servers": [
+                {
+                    "address": host,
+                    "port": int(port_s),
+                    "method": method,
+                    "password": password,
+                }
+            ]
         },
         "streamSettings": {"network": "tcp"},
     }

@@ -20,6 +20,7 @@ that Pipeline.run() checks between stages and between health batches.
 The worker thread is then joined (QThread.wait()) so resources are released
 before the next run.
 """
+
 from __future__ import annotations
 
 import sys
@@ -51,10 +52,10 @@ from PySide6.QtWidgets import (
 
 from ..pipeline import Pipeline, PipelineResult, StopController
 
-
 # ---------------------------------------------------------------------------
 # Worker thread
 # ---------------------------------------------------------------------------
+
 
 class WorkerThread(QThread):
     """Run Pipeline.run() in a background thread.
@@ -66,8 +67,8 @@ class WorkerThread(QThread):
     error_signal — (error_str: str)
     """
 
-    progress     = Signal(str, int, int, str)
-    result       = Signal(object)
+    progress = Signal(str, int, int, str)
+    result = Signal(object)
     error_signal = Signal(str)
 
     def __init__(
@@ -76,8 +77,8 @@ class WorkerThread(QThread):
         stop_ctrl: StopController,
     ) -> None:
         super().__init__()
-        self._pipeline   = pipeline
-        self._stop_ctrl  = stop_ctrl
+        self._pipeline = pipeline
+        self._stop_ctrl = stop_ctrl
 
     def run(self) -> None:
         try:
@@ -97,6 +98,7 @@ class WorkerThread(QThread):
 # Pipeline options widget
 # ---------------------------------------------------------------------------
 
+
 class PipelineOptionsWidget(QGroupBox):
     """Collapsible group of Pipeline tuning controls."""
 
@@ -104,9 +106,9 @@ class PipelineOptionsWidget(QGroupBox):
         super().__init__("Pipeline Options", parent)
         layout = QHBoxLayout()
 
-        self.health_cb     = QCheckBox("Health check")
+        self.health_cb = QCheckBox("Health check")
         self.health_cb.setChecked(True)
-        self.http_cb       = QCheckBox("HTTP probe")
+        self.http_cb = QCheckBox("HTTP probe")
         self.google_204_cb = QCheckBox("Google 204")
         layout.addWidget(self.health_cb)
         layout.addWidget(self.http_cb)
@@ -149,22 +151,23 @@ class PipelineOptionsWidget(QGroupBox):
 # Main window
 # ---------------------------------------------------------------------------
 
+
 class MainWindow(QMainWindow):
     """Main GUI window for v2ray-finder (V1-A2: Pipeline backend)."""
 
     # Column indices
-    COL_NUM      = 0
-    COL_PROTO    = 1
-    COL_SCORE    = 2
-    COL_GRADE    = 3
-    COL_LATENCY  = 4
-    COL_SOURCE   = 5
-    COL_CONFIG   = 6
+    COL_NUM = 0
+    COL_PROTO = 1
+    COL_SCORE = 2
+    COL_GRADE = 3
+    COL_LATENCY = 4
+    COL_SOURCE = 5
+    COL_CONFIG = 6
 
     def __init__(self) -> None:
         super().__init__()
-        self._result:  Optional[PipelineResult] = None
-        self._worker:  Optional[WorkerThread]   = None
+        self._result: Optional[PipelineResult] = None
+        self._worker: Optional[WorkerThread] = None
         self._stop_ctrl = StopController()
         self._init_ui()
 
@@ -176,8 +179,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("v2ray-finder")
         self.setGeometry(100, 100, 1200, 800)
 
-        root  = QWidget()
-        vbox  = QVBoxLayout()
+        root = QWidget()
+        vbox = QVBoxLayout()
         self.setCentralWidget(root)
 
         # --- Token row ---
@@ -251,12 +254,12 @@ class MainWindow(QMainWindow):
         self.table.setHorizontalHeaderLabels(
             ["#", "Protocol", "Score", "Grade", "Latency (ms)", "Source", "Config"]
         )
-        self.table.setColumnWidth(self.COL_NUM,     45)
-        self.table.setColumnWidth(self.COL_PROTO,   80)
-        self.table.setColumnWidth(self.COL_SCORE,   60)
-        self.table.setColumnWidth(self.COL_GRADE,   55)
+        self.table.setColumnWidth(self.COL_NUM, 45)
+        self.table.setColumnWidth(self.COL_PROTO, 80)
+        self.table.setColumnWidth(self.COL_SCORE, 60)
+        self.table.setColumnWidth(self.COL_GRADE, 55)
         self.table.setColumnWidth(self.COL_LATENCY, 95)
-        self.table.setColumnWidth(self.COL_SOURCE,  180)
+        self.table.setColumnWidth(self.COL_SOURCE, 180)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -286,7 +289,7 @@ class MainWindow(QMainWindow):
             return
 
         self._stop_ctrl.reset()
-        token   = self.token_input.text().strip() or None
+        token = self.token_input.text().strip() or None
         pipeline = self.options.build_pipeline(github_token=token)
 
         self._worker = WorkerThread(pipeline=pipeline, stop_ctrl=self._stop_ctrl)
@@ -320,7 +323,9 @@ class MainWindow(QMainWindow):
             return
 
         filename, _ = QFileDialog.getSaveFileName(
-            self, "Save V2Ray Servers", "v2ray_servers.txt",
+            self,
+            "Save V2Ray Servers",
+            "v2ray_servers.txt",
             "Text Files (*.txt);;All Files (*)",
         )
         if filename:
@@ -328,7 +333,8 @@ class MainWindow(QMainWindow):
                 with open(filename, "w", encoding="utf-8") as fh:
                     fh.write("\n".join(configs) + "\n")
                 QMessageBox.information(
-                    self, "Saved",
+                    self,
+                    "Saved",
                     f"Saved {len(configs)} configs to:\n{filename}",
                 )
                 self.status_label.setText(f"💾 Saved {len(configs)} configs")
@@ -343,8 +349,9 @@ class MainWindow(QMainWindow):
             if item:
                 configs.append(item.text())
         if not configs:
-            QMessageBox.information(self, "Nothing Selected",
-                                    "Select rows in the table first.")
+            QMessageBox.information(
+                self, "Nothing Selected", "Select rows in the table first."
+            )
             return
         QApplication.clipboard().setText("\n".join(configs))
         self.status_label.setText(f"📋 Copied {len(configs)} configs")
@@ -378,8 +385,7 @@ class MainWindow(QMainWindow):
 
     def _on_error(self, error_str: str) -> None:
         self.status_label.setText(f"❌ Error: {error_str}")
-        QMessageBox.critical(self, "Pipeline Error",
-                             f"Pipeline failed:\n{error_str}")
+        QMessageBox.critical(self, "Pipeline Error", f"Pipeline failed:\n{error_str}")
 
     def _on_worker_done(self) -> None:
         self.fetch_btn.setEnabled(True)
@@ -418,13 +424,13 @@ class MainWindow(QMainWindow):
             def _cell(text: str) -> QTableWidgetItem:
                 return QTableWidgetItem(str(text))
 
-            self.table.setItem(i, self.COL_NUM,     _cell(i + 1))
-            self.table.setItem(i, self.COL_PROTO,   _cell(s.protocol))
-            self.table.setItem(i, self.COL_SCORE,   _cell(f"{s.total:.1f}"))
-            self.table.setItem(i, self.COL_GRADE,   _cell(s.grade))
+            self.table.setItem(i, self.COL_NUM, _cell(i + 1))
+            self.table.setItem(i, self.COL_PROTO, _cell(s.protocol))
+            self.table.setItem(i, self.COL_SCORE, _cell(f"{s.total:.1f}"))
+            self.table.setItem(i, self.COL_GRADE, _cell(s.grade))
             self.table.setItem(i, self.COL_LATENCY, _cell(latency))
-            self.table.setItem(i, self.COL_SOURCE,  _cell(src_display))
-            self.table.setItem(i, self.COL_CONFIG,  _cell(s.config))
+            self.table.setItem(i, self.COL_SOURCE, _cell(src_display))
+            self.table.setItem(i, self.COL_CONFIG, _cell(s.config))
 
         self.table.setSortingEnabled(True)
 
@@ -455,6 +461,7 @@ class MainWindow(QMainWindow):
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def launch() -> None:
     """Launch the GUI application."""

@@ -1,4 +1,5 @@
 """Tests for xray_connectivity.py — V1-D4 retry logic."""
+
 from __future__ import annotations
 
 import unittest
@@ -11,12 +12,13 @@ from v2ray_finder.xray_connectivity import (
     find_free_port,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-VMESS_URI = "vmess://eyJhZGQiOiIxMjcuMC4wLjEiLCJwb3J0IjoiODA4MCIsImlkIjoiZmFrZS11dWlkIn0="
+VMESS_URI = (
+    "vmess://eyJhZGQiOiIxMjcuMC4wLjEiLCJwb3J0IjoiODA4MCIsImlkIjoiZmFrZS11dWlkIn0="
+)
 
 
 def _make_runner_mock(fail_on_first: bool = False):
@@ -42,6 +44,7 @@ def _make_runner_mock(fail_on_first: bool = False):
 # find_free_port
 # ---------------------------------------------------------------------------
 
+
 class TestFindFreePort(unittest.TestCase):
 
     def test_returns_int(self):
@@ -62,6 +65,7 @@ class TestFindFreePort(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # check_one — no retry path (normal success)
 # ---------------------------------------------------------------------------
+
 
 class TestCheckOneSuccess(unittest.TestCase):
 
@@ -113,6 +117,7 @@ class TestCheckOneSuccess(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # V1-D4: retry on xray start failure
 # ---------------------------------------------------------------------------
+
 
 class TestCheckOneRetry(unittest.TestCase):
 
@@ -221,6 +226,7 @@ class TestCheckOneRetry(unittest.TestCase):
 # retried field surfaces in RealHealthResult / real_health_to_dict
 # ---------------------------------------------------------------------------
 
+
 class TestRetryFieldPropagation(unittest.TestCase):
 
     def test_legacy_result_retried_default_false(self):
@@ -233,6 +239,7 @@ class TestRetryFieldPropagation(unittest.TestCase):
 
     def test_real_health_to_dict_contains_retried(self):
         from v2ray_finder.xray_connectivity import real_health_to_dict
+
         r = RealHealthResult(config="vmess://x", protocol="vmess", retried=True)
         d = real_health_to_dict(r)
         self.assertIn("retried", d)

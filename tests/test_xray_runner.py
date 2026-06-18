@@ -15,7 +15,7 @@ import sys
 import zipfile
 from pathlib import Path
 from typing import AsyncIterator
-from unittest.mock import AsyncMock, MagicMock, patch, mock_open
+from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
 
@@ -25,7 +25,6 @@ from v2ray_finder.xray_runner import (
     _asset_name,
     _binary_name,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -55,28 +54,38 @@ class TestPlatformHelpers:
             assert _binary_name() == "xray"
 
     def test_asset_name_linux_x86_64(self):
-        with patch("platform.system", return_value="Linux"), \
-             patch("platform.machine", return_value="x86_64"):
+        with (
+            patch("platform.system", return_value="Linux"),
+            patch("platform.machine", return_value="x86_64"),
+        ):
             assert _asset_name() == "Xray-linux-64.zip"
 
     def test_asset_name_linux_aarch64(self):
-        with patch("platform.system", return_value="Linux"), \
-             patch("platform.machine", return_value="aarch64"):
+        with (
+            patch("platform.system", return_value="Linux"),
+            patch("platform.machine", return_value="aarch64"),
+        ):
             assert _asset_name() == "Xray-linux-arm64-v8a.zip"
 
     def test_asset_name_macos(self):
-        with patch("platform.system", return_value="Darwin"), \
-             patch("platform.machine", return_value="x86_64"):
+        with (
+            patch("platform.system", return_value="Darwin"),
+            patch("platform.machine", return_value="x86_64"),
+        ):
             assert _asset_name() == "Xray-macos-64.zip"
 
     def test_asset_name_windows(self):
-        with patch("platform.system", return_value="Windows"), \
-             patch("platform.machine", return_value="amd64"):
+        with (
+            patch("platform.system", return_value="Windows"),
+            patch("platform.machine", return_value="amd64"),
+        ):
             assert _asset_name() == "Xray-windows-64.zip"
 
     def test_asset_name_unknown_platform_falls_back_linux(self):
-        with patch("platform.system", return_value="FreeBSD"), \
-             patch("platform.machine", return_value="x86_64"):
+        with (
+            patch("platform.system", return_value="FreeBSD"),
+            patch("platform.machine", return_value="x86_64"),
+        ):
             assert _asset_name().startswith("Xray-linux-")
 
 
@@ -125,11 +134,13 @@ class TestFindBinary:
         binary = tmp_path / "xray"
         binary.write_bytes(b"fake")
         mgr = XrayBinaryManager(auto_download=False)
-        with patch("shutil.which", return_value=None), \
-             patch(
-                 "v2ray_finder.xray_runner._COMMON_INSTALL_DIRS",
-                 [str(tmp_path)],
-             ):
+        with (
+            patch("shutil.which", return_value=None),
+            patch(
+                "v2ray_finder.xray_runner._COMMON_INSTALL_DIRS",
+                [str(tmp_path)],
+            ),
+        ):
             result = mgr.find_binary()
         assert result == binary
 
@@ -137,17 +148,19 @@ class TestFindBinary:
         cached = tmp_path / "xray"
         cached.write_bytes(b"fake")
         mgr = XrayBinaryManager(download_dir=str(tmp_path), auto_download=False)
-        with patch("shutil.which", return_value=None), \
-             patch(
-                 "v2ray_finder.xray_runner._COMMON_INSTALL_DIRS", []
-             ):
+        with (
+            patch("shutil.which", return_value=None),
+            patch("v2ray_finder.xray_runner._COMMON_INSTALL_DIRS", []),
+        ):
             result = mgr.find_binary()
         assert result == cached
 
     def test_auto_download_false_raises(self):
         mgr = XrayBinaryManager(auto_download=False)
-        with patch("shutil.which", return_value=None), \
-             patch("v2ray_finder.xray_runner._COMMON_INSTALL_DIRS", []):
+        with (
+            patch("shutil.which", return_value=None),
+            patch("v2ray_finder.xray_runner._COMMON_INSTALL_DIRS", []),
+        ):
             with pytest.raises(XrayBinaryNotFoundError, match="not found"):
                 mgr.find_binary()
 
@@ -169,18 +182,25 @@ class TestFindBinary:
 
 
 class TestDownloadBinary:
-    def _make_release_json(self, asset_name: str, url: str = "https://example.com/xray.zip") -> bytes:
-        return json.dumps({
-            "tag_name": "v25.0.0",
-            "assets": [{"name": asset_name, "browser_download_url": url}],
-        }).encode()
+    def _make_release_json(
+        self, asset_name: str, url: str = "https://example.com/xray.zip"
+    ) -> bytes:
+        return json.dumps(
+            {
+                "tag_name": "v25.0.0",
+                "assets": [{"name": asset_name, "browser_download_url": url}],
+            }
+        ).encode()
 
     def test_happy_path(self, tmp_path):
         system = platform.system().lower()
         machine = platform.machine().lower()
         arch_map = {
-            "x86_64": "64", "amd64": "64",
-            "aarch64": "arm64-v8a", "arm64": "arm64-v8a", "armv7l": "arm32-v7a",
+            "x86_64": "64",
+            "amd64": "64",
+            "aarch64": "arm64-v8a",
+            "arm64": "arm64-v8a",
+            "armv7l": "arm32-v7a",
         }
         arch = arch_map.get(machine, "64")
         if system == "darwin":
@@ -196,15 +216,22 @@ class TestDownloadBinary:
         mgr = XrayBinaryManager(download_dir=str(tmp_path), auto_download=True)
 
         class _FakeResp:
-            def read(self): return release_json
-            def __enter__(self): return self
-            def __exit__(self, *_): pass
+            def read(self):
+                return release_json
 
-        with patch("urllib.request.urlopen", return_value=_FakeResp()), \
-             patch("urllib.request.urlretrieve") as mock_retr, \
-             patch("tempfile.NamedTemporaryFile") as mock_tmp, \
-             patch("os.unlink"), \
-             patch("platform.system", return_value=system.capitalize()):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                pass
+
+        with (
+            patch("urllib.request.urlopen", return_value=_FakeResp()),
+            patch("urllib.request.urlretrieve") as mock_retr,
+            patch("tempfile.NamedTemporaryFile") as mock_tmp,
+            patch("os.unlink"),
+            patch("platform.system", return_value=system.capitalize()),
+        ):
 
             # Make the temp file point to our fake zip
             tmp_zip = tmp_path / "dl.zip"
@@ -219,20 +246,31 @@ class TestDownloadBinary:
         assert result.parent == tmp_path
 
     def test_missing_asset_raises(self, tmp_path):
-        release_json = json.dumps({
-            "tag_name": "v1.0",
-            "assets": [{"name": "Xray-plan9-mips.zip", "browser_download_url": "http://x"}],
-        }).encode()
+        release_json = json.dumps(
+            {
+                "tag_name": "v1.0",
+                "assets": [
+                    {"name": "Xray-plan9-mips.zip", "browser_download_url": "http://x"}
+                ],
+            }
+        ).encode()
 
         class _FakeResp:
-            def read(self): return release_json
-            def __enter__(self): return self
-            def __exit__(self, *_): pass
+            def read(self):
+                return release_json
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                pass
 
         mgr = XrayBinaryManager(download_dir=str(tmp_path))
-        with patch("urllib.request.urlopen", return_value=_FakeResp()), \
-             patch("platform.system", return_value="Linux"), \
-             patch("platform.machine", return_value="x86_64"):
+        with (
+            patch("urllib.request.urlopen", return_value=_FakeResp()),
+            patch("platform.system", return_value="Linux"),
+            patch("platform.machine", return_value="x86_64"),
+        ):
             with pytest.raises(XrayBinaryNotFoundError, match="Asset"):
                 mgr._download_binary()
 
@@ -247,20 +285,27 @@ class TestDownloadBinary:
         empty_zip = buf.getvalue()
 
         class _FakeResp:
-            def read(self): return release_json
-            def __enter__(self): return self
-            def __exit__(self, *_): pass
+            def read(self):
+                return release_json
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                pass
 
         mgr = XrayBinaryManager(download_dir=str(tmp_path))
         tmp_zip = tmp_path / "dl.zip"
         tmp_zip.write_bytes(empty_zip)
 
-        with patch("urllib.request.urlopen", return_value=_FakeResp()), \
-             patch("urllib.request.urlretrieve"), \
-             patch("tempfile.NamedTemporaryFile") as mock_tmp, \
-             patch("os.unlink"), \
-             patch("platform.system", return_value="Linux"), \
-             patch("platform.machine", return_value="x86_64"):
+        with (
+            patch("urllib.request.urlopen", return_value=_FakeResp()),
+            patch("urllib.request.urlretrieve"),
+            patch("tempfile.NamedTemporaryFile") as mock_tmp,
+            patch("os.unlink"),
+            patch("platform.system", return_value="Linux"),
+            patch("platform.machine", return_value="x86_64"),
+        ):
             mock_tmp.return_value.__enter__ = lambda s: s
             mock_tmp.return_value.__exit__ = MagicMock(return_value=False)
             mock_tmp.return_value.name = str(tmp_zip)
@@ -294,7 +339,9 @@ class TestVersionAndAvailability:
 
     def test_get_version_exception_returns_unknown(self):
         mgr = XrayBinaryManager(auto_download=False)
-        with patch.object(mgr, "find_binary", side_effect=XrayBinaryNotFoundError("no")):
+        with patch.object(
+            mgr, "find_binary", side_effect=XrayBinaryNotFoundError("no")
+        ):
             assert mgr.get_version() == "unknown"
 
     def test_is_available_true(self, tmp_path):
@@ -305,8 +352,10 @@ class TestVersionAndAvailability:
 
     def test_is_available_false(self):
         mgr = XrayBinaryManager(auto_download=False)
-        with patch("shutil.which", return_value=None), \
-             patch("v2ray_finder.xray_runner._COMMON_INSTALL_DIRS", []):
+        with (
+            patch("shutil.which", return_value=None),
+            patch("v2ray_finder.xray_runner._COMMON_INSTALL_DIRS", []),
+        ):
             assert mgr.is_available() is False
 
 
@@ -333,7 +382,9 @@ class TestRunContextManager:
         proc.stdout = MagicMock()
         proc.stdout.__aiter__ = _aiter
 
-        async def _wait(): proc.returncode = rc
+        async def _wait():
+            proc.returncode = rc
+
         proc.wait = _wait
         proc.terminate = MagicMock()
         proc.kill = MagicMock()
@@ -348,11 +399,12 @@ class TestRunContextManager:
 
         mock_proc = self._make_mock_proc(b"[Info] started")
 
-        with patch.object(
-            XrayBinaryManager, "find_binary", return_value=binary
-        ), patch(
-            "asyncio.create_subprocess_exec", return_value=mock_proc
-        ) as mock_exec:
+        with (
+            patch.object(XrayBinaryManager, "find_binary", return_value=binary),
+            patch(
+                "asyncio.create_subprocess_exec", return_value=mock_proc
+            ) as mock_exec,
+        ):
             mgr = XrayBinaryManager(binary_path=str(binary), auto_download=False)
             async with mgr.run(config, socks_port=10800) as proc:
                 assert proc is mock_proc
@@ -369,15 +421,20 @@ class TestRunContextManager:
         proc = MagicMock()
         proc.returncode = None
         proc.kill = MagicMock()
-        async def _wait(): proc.returncode = -9
+
+        async def _wait():
+            proc.returncode = -9
+
         proc.wait = _wait
 
         async def _slow_wait(*args, **kwargs):
             raise asyncio.TimeoutError()
 
-        with patch.object(XrayBinaryManager, "find_binary", return_value=binary), \
-             patch("asyncio.create_subprocess_exec", return_value=proc), \
-             patch("asyncio.wait_for", side_effect=asyncio.TimeoutError()):
+        with (
+            patch.object(XrayBinaryManager, "find_binary", return_value=binary),
+            patch("asyncio.create_subprocess_exec", return_value=proc),
+            patch("asyncio.wait_for", side_effect=asyncio.TimeoutError()),
+        ):
             mgr = XrayBinaryManager(
                 binary_path=str(binary), auto_download=False, startup_timeout=0.01
             )
@@ -398,7 +455,10 @@ class TestRunContextManager:
         proc = MagicMock()
         proc.returncode = 1  # already dead
         proc.kill = MagicMock()
-        async def _wait(): pass
+
+        async def _wait():
+            pass
+
         proc.wait = _wait
 
         async def _aiter(self):
@@ -408,8 +468,10 @@ class TestRunContextManager:
         proc.stdout = MagicMock()
         proc.stdout.__aiter__ = _aiter
 
-        with patch.object(XrayBinaryManager, "find_binary", return_value=binary), \
-             patch("asyncio.create_subprocess_exec", return_value=proc):
+        with (
+            patch.object(XrayBinaryManager, "find_binary", return_value=binary),
+            patch("asyncio.create_subprocess_exec", return_value=proc),
+        ):
             mgr = XrayBinaryManager(
                 binary_path=str(binary), auto_download=False, startup_timeout=2.0
             )

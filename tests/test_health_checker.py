@@ -31,10 +31,10 @@ from v2ray_finder.health_checker import (
     sort_by_quality,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_vmess(host: str, port: int) -> str:
     data = {"add": host, "port": port}
@@ -51,6 +51,7 @@ def _make_ssr(host: str, port: int) -> str:
 # ---------------------------------------------------------------------------
 # _latency_to_score
 # ---------------------------------------------------------------------------
+
 
 class TestLatencyToScore:
     def test_at_100ms_is_100(self):
@@ -89,6 +90,7 @@ class TestLatencyToScore:
 # ServerHealth — is_healthy
 # ---------------------------------------------------------------------------
 
+
 def test_is_healthy_true():
     h = ServerHealth(config="vmess://x", protocol="vmess", status=HealthStatus.HEALTHY)
     assert h.is_healthy is True
@@ -100,7 +102,9 @@ def test_is_healthy_degraded_is_true():
 
 
 def test_is_healthy_false_unreachable():
-    h = ServerHealth(config="vmess://x", protocol="vmess", status=HealthStatus.UNREACHABLE)
+    h = ServerHealth(
+        config="vmess://x", protocol="vmess", status=HealthStatus.UNREACHABLE
+    )
     assert h.is_healthy is False
 
 
@@ -113,6 +117,7 @@ def test_is_healthy_false_invalid():
 # ServerHealth — quality_score
 # ---------------------------------------------------------------------------
 
+
 class TestQualityScore:
     def test_invalid_is_zero(self):
         h = ServerHealth(config="x", protocol="?", status=HealthStatus.INVALID)
@@ -123,43 +128,65 @@ class TestQualityScore:
         assert h.quality_score == 0.0
 
     def test_no_latency_is_fifty(self):
-        h = ServerHealth(config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=None)
+        h = ServerHealth(
+            config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=None
+        )
         assert h.quality_score == 50.0
 
     def test_tcp_latency_50ms_is_100(self):
-        h = ServerHealth(config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=50.0)
+        h = ServerHealth(
+            config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=50.0
+        )
         assert h.quality_score == 100.0
 
     def test_tcp_latency_200ms(self):
-        h = ServerHealth(config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=200.0)
+        h = ServerHealth(
+            config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=200.0
+        )
         assert h.quality_score == pytest.approx(85.0, abs=0.5)
 
     def test_at_300ms_boundary(self):
-        h = ServerHealth(config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=300.0)
+        h = ServerHealth(
+            config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=300.0
+        )
         assert h.quality_score == pytest.approx(70.0, abs=0.5)
 
     def test_at_1000ms_boundary(self):
-        h = ServerHealth(config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=1000.0)
+        h = ServerHealth(
+            config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=1000.0
+        )
         assert h.quality_score == pytest.approx(20.0, abs=0.5)
 
     def test_at_3000ms_floor(self):
-        h = ServerHealth(config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=3000.0)
+        h = ServerHealth(
+            config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=3000.0
+        )
         assert h.quality_score == 0.0
 
     def test_beyond_3000ms_stays_zero(self):
-        h = ServerHealth(config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=9999.0)
+        h = ServerHealth(
+            config="x", protocol="?", status=HealthStatus.HEALTHY, latency_ms=9999.0
+        )
         assert h.quality_score == 0.0
 
     def test_live_server_beats_dead(self):
-        slow = ServerHealth(config="x", protocol="vmess", status=HealthStatus.HEALTHY, latency_ms=2999.0)
-        dead = ServerHealth(config="y", protocol="vmess", status=HealthStatus.UNREACHABLE)
+        slow = ServerHealth(
+            config="x", protocol="vmess", status=HealthStatus.HEALTHY, latency_ms=2999.0
+        )
+        dead = ServerHealth(
+            config="y", protocol="vmess", status=HealthStatus.UNREACHABLE
+        )
         assert slow.quality_score > dead.quality_score
 
     def test_monotone_decreasing(self):
         latencies = [50, 100, 200, 300, 500, 1000, 1500, 2000, 3000, 5000]
         scores = [
-            ServerHealth(config="x", protocol="vmess", status=HealthStatus.HEALTHY,
-                         latency_ms=float(l)).quality_score
+            ServerHealth(
+                config="x",
+                protocol="vmess",
+                status=HealthStatus.HEALTHY,
+                latency_ms=float(l),
+            ).quality_score
             for l in latencies
         ]
         for i in range(len(scores) - 1):
@@ -168,7 +195,9 @@ class TestQualityScore:
     def test_google_204_latency_takes_priority_over_tcp(self):
         """Layer 3 latency governs score even if TCP was fast."""
         h = ServerHealth(
-            config="x", protocol="vmess", status=HealthStatus.HEALTHY,
+            config="x",
+            protocol="vmess",
+            status=HealthStatus.HEALTHY,
             latency_ms=50.0,
             google_204_latency_ms=2000.0,
         )
@@ -176,7 +205,9 @@ class TestQualityScore:
 
     def test_google_204_latency_fast_scores_high(self):
         h = ServerHealth(
-            config="x", protocol="vmess", status=HealthStatus.HEALTHY,
+            config="x",
+            protocol="vmess",
+            status=HealthStatus.HEALTHY,
             latency_ms=800.0,
             google_204_latency_ms=80.0,
         )
@@ -190,6 +221,7 @@ class TestQualityScore:
 # ---------------------------------------------------------------------------
 # ServerValidator — extract_*
 # ---------------------------------------------------------------------------
+
 
 class TestServerValidator:
     def test_extract_vmess_valid(self):
@@ -209,13 +241,17 @@ class TestServerValidator:
         assert ServerValidator.extract_vmess_info("vmess://not_valid_base64!!!") is None
 
     def test_extract_vless_valid(self):
-        r = ServerValidator.extract_vless_info("vless://uuid@example.com:443?encryption=none#tag")
+        r = ServerValidator.extract_vless_info(
+            "vless://uuid@example.com:443?encryption=none#tag"
+        )
         assert r is not None
         assert r["host"] == "example.com"
         assert r["port"] == 443
 
     def test_extract_trojan_valid(self):
-        r = ServerValidator.extract_trojan_info("trojan://pw@example.com:443?security=tls#tag")
+        r = ServerValidator.extract_trojan_info(
+            "trojan://pw@example.com:443?security=tls#tag"
+        )
         assert r is not None
         assert r["host"] == "example.com"
         assert r["port"] == 443
@@ -260,6 +296,7 @@ class TestServerValidator:
 # _http_direct_probe — Layer 2
 # ---------------------------------------------------------------------------
 
+
 class TestHttpDirectProbe:
     def test_success_returns_ok_status_latency(self):
         fake_response = b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"
@@ -282,7 +319,9 @@ class TestHttpDirectProbe:
         assert status == 200
 
     def test_connection_refused_returns_failure(self):
-        with patch("socket.create_connection", side_effect=ConnectionRefusedError("refused")):
+        with patch(
+            "socket.create_connection", side_effect=ConnectionRefusedError("refused")
+        ):
             ok, status, latency, err = _http_direct_probe(timeout=1.0)
         assert ok is False
         assert status is None
@@ -306,14 +345,20 @@ class TestHttpDirectProbe:
 # _socks5_http_get — Layer 3
 # ---------------------------------------------------------------------------
 
+
 class TestSocks5HttpGet:
-    def _make_sock(self, handshake_ok=True, connect_ok=True, http_resp=b"HTTP/1.1 204 No Content\r\n"):
+    def _make_sock(
+        self,
+        handshake_ok=True,
+        connect_ok=True,
+        http_resp=b"HTTP/1.1 204 No Content\r\n",
+    ):
         mock_sock = MagicMock()
         responses = []
         if handshake_ok:
             responses.append(b"\x05\x00")
         else:
-            responses.append(b"\x05\xFF")
+            responses.append(b"\x05\xff")
         if connect_ok:
             responses.append(b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00")
         else:
@@ -326,29 +371,35 @@ class TestSocks5HttpGet:
     def test_successful_204(self):
         mock_sock = self._make_sock()
         with patch("socket.create_connection", return_value=mock_sock):
-            ok, status, latency = _socks5_http_get("127.0.0.1", 10808,
-                                                    "clients3.google.com", 80, "/generate_204")
+            ok, status, latency = _socks5_http_get(
+                "127.0.0.1", 10808, "clients3.google.com", 80, "/generate_204"
+            )
         assert ok is True
         assert status == 204
 
     def test_socks5_handshake_rejected(self):
         mock_sock = self._make_sock(handshake_ok=False)
         with patch("socket.create_connection", return_value=mock_sock):
-            ok, status, latency = _socks5_http_get("127.0.0.1", 10808,
-                                                    "clients3.google.com", 80, "/generate_204")
+            ok, status, latency = _socks5_http_get(
+                "127.0.0.1", 10808, "clients3.google.com", 80, "/generate_204"
+            )
         assert ok is False
 
     def test_socks5_connect_rejected(self):
         mock_sock = self._make_sock(connect_ok=False)
         with patch("socket.create_connection", return_value=mock_sock):
-            ok, status, latency = _socks5_http_get("127.0.0.1", 10808,
-                                                    "clients3.google.com", 80, "/generate_204")
+            ok, status, latency = _socks5_http_get(
+                "127.0.0.1", 10808, "clients3.google.com", 80, "/generate_204"
+            )
         assert ok is False
 
     def test_connection_error_returns_failure(self):
-        with patch("socket.create_connection", side_effect=ConnectionRefusedError("refused")):
-            ok, status, latency = _socks5_http_get("127.0.0.1", 19999,
-                                                    "clients3.google.com", 80, "/generate_204")
+        with patch(
+            "socket.create_connection", side_effect=ConnectionRefusedError("refused")
+        ):
+            ok, status, latency = _socks5_http_get(
+                "127.0.0.1", 19999, "clients3.google.com", 80, "/generate_204"
+            )
         assert ok is False
         assert latency >= 0
 
@@ -356,6 +407,7 @@ class TestSocks5HttpGet:
 # ---------------------------------------------------------------------------
 # HealthChecker — Layer 1 (TCP)
 # ---------------------------------------------------------------------------
+
 
 class TestHealthCheckerTCP:
     @pytest.mark.asyncio
@@ -396,8 +448,12 @@ class TestHealthCheckerTCP:
     async def test_reachable_server_is_healthy(self):
         checker = HealthChecker()
         vmess = _make_vmess("example.com", 443)
-        with patch.object(checker, "check_tcp_connectivity",
-                          new_callable=AsyncMock, return_value=(True, 50.0, None)):
+        with patch.object(
+            checker,
+            "check_tcp_connectivity",
+            new_callable=AsyncMock,
+            return_value=(True, 50.0, None),
+        ):
             result = await checker.check_server_health(vmess, "vmess")
         assert result.status == HealthStatus.HEALTHY
         assert result.tcp_ok is True
@@ -409,8 +465,12 @@ class TestHealthCheckerTCP:
     async def test_unreachable_server(self):
         checker = HealthChecker()
         vmess = _make_vmess("example.com", 443)
-        with patch.object(checker, "check_tcp_connectivity",
-                          new_callable=AsyncMock, return_value=(False, None, "Connection refused")):
+        with patch.object(
+            checker,
+            "check_tcp_connectivity",
+            new_callable=AsyncMock,
+            return_value=(False, None, "Connection refused"),
+        ):
             result = await checker.check_server_health(vmess, "vmess")
         assert result.status == HealthStatus.UNREACHABLE
         assert result.tcp_ok is False
@@ -422,8 +482,12 @@ class TestHealthCheckerTCP:
     async def test_high_latency_is_degraded(self):
         checker = HealthChecker()
         vmess = _make_vmess("example.com", 443)
-        with patch.object(checker, "check_tcp_connectivity",
-                          new_callable=AsyncMock, return_value=(True, 600.0, None)):
+        with patch.object(
+            checker,
+            "check_tcp_connectivity",
+            new_callable=AsyncMock,
+            return_value=(True, 600.0, None),
+        ):
             result = await checker.check_server_health(vmess, "vmess")
         assert result.status == HealthStatus.DEGRADED
         assert 40.0 < result.quality_score < 60.0
@@ -433,15 +497,24 @@ class TestHealthCheckerTCP:
 # HealthChecker — Layer 2 (HTTP probe)
 # ---------------------------------------------------------------------------
 
+
 class TestHealthCheckerHTTPProbe:
     @pytest.mark.asyncio
     async def test_http_probe_ok_sets_field(self):
         checker = HealthChecker(check_http_probe=True)
         vmess = _make_vmess("example.com", 443)
-        with patch.object(checker, "check_tcp_connectivity",
-                          new_callable=AsyncMock, return_value=(True, 50.0, None)):
-            with patch.object(checker, "_run_http_probe",
-                               new_callable=AsyncMock, return_value=(True, 204, 120.0, None)):
+        with patch.object(
+            checker,
+            "check_tcp_connectivity",
+            new_callable=AsyncMock,
+            return_value=(True, 50.0, None),
+        ):
+            with patch.object(
+                checker,
+                "_run_http_probe",
+                new_callable=AsyncMock,
+                return_value=(True, 204, 120.0, None),
+            ):
                 result = await checker.check_server_health(vmess, "vmess")
         assert result.http_probe_ok is True
         assert result.http_probe_latency_ms == 120.0
@@ -451,10 +524,18 @@ class TestHealthCheckerHTTPProbe:
     async def test_http_probe_failure_still_sets_field(self):
         checker = HealthChecker(check_http_probe=True)
         vmess = _make_vmess("example.com", 443)
-        with patch.object(checker, "check_tcp_connectivity",
-                          new_callable=AsyncMock, return_value=(True, 50.0, None)):
-            with patch.object(checker, "_run_http_probe",
-                               new_callable=AsyncMock, return_value=(False, None, None, "timeout")):
+        with patch.object(
+            checker,
+            "check_tcp_connectivity",
+            new_callable=AsyncMock,
+            return_value=(True, 50.0, None),
+        ):
+            with patch.object(
+                checker,
+                "_run_http_probe",
+                new_callable=AsyncMock,
+                return_value=(False, None, None, "timeout"),
+            ):
                 result = await checker.check_server_health(vmess, "vmess")
         assert result.http_probe_ok is False
         assert result.http_probe_error == "timeout"
@@ -464,10 +545,15 @@ class TestHealthCheckerHTTPProbe:
     async def test_http_probe_skipped_when_disabled(self):
         checker = HealthChecker(check_http_probe=False)
         vmess = _make_vmess("example.com", 443)
-        with patch.object(checker, "check_tcp_connectivity",
-                          new_callable=AsyncMock, return_value=(True, 50.0, None)):
-            with patch.object(checker, "_run_http_probe",
-                               new_callable=AsyncMock) as mock_probe:
+        with patch.object(
+            checker,
+            "check_tcp_connectivity",
+            new_callable=AsyncMock,
+            return_value=(True, 50.0, None),
+        ):
+            with patch.object(
+                checker, "_run_http_probe", new_callable=AsyncMock
+            ) as mock_probe:
                 result = await checker.check_server_health(vmess, "vmess")
         mock_probe.assert_not_called()
         assert result.probe_level == 1
@@ -477,10 +563,15 @@ class TestHealthCheckerHTTPProbe:
         """Layer 2 must NOT run if Layer 1 (TCP) failed."""
         checker = HealthChecker(check_http_probe=True)
         vmess = _make_vmess("example.com", 443)
-        with patch.object(checker, "check_tcp_connectivity",
-                          new_callable=AsyncMock, return_value=(False, None, "refused")):
-            with patch.object(checker, "_run_http_probe",
-                               new_callable=AsyncMock) as mock_probe:
+        with patch.object(
+            checker,
+            "check_tcp_connectivity",
+            new_callable=AsyncMock,
+            return_value=(False, None, "refused"),
+        ):
+            with patch.object(
+                checker, "_run_http_probe", new_callable=AsyncMock
+            ) as mock_probe:
                 result = await checker.check_server_health(vmess, "vmess")
         mock_probe.assert_not_called()
         assert result.status == HealthStatus.UNREACHABLE
@@ -489,6 +580,7 @@ class TestHealthCheckerHTTPProbe:
 # ---------------------------------------------------------------------------
 # HealthChecker — Layer 3 (xray / Google 204)
 # ---------------------------------------------------------------------------
+
 
 class TestHealthCheckerGoogle204:
     @pytest.mark.asyncio
@@ -504,10 +596,16 @@ class TestHealthCheckerGoogle204:
         mock_checker.is_xray_available.return_value = True
         mock_checker.check_server_real_sync.return_value = mock_real_result
 
-        with patch.object(checker, "check_tcp_connectivity",
-                          new_callable=AsyncMock, return_value=(True, 50.0, None)):
-            with patch("v2ray_finder.health_checker.RealConnectivityChecker",
-                       return_value=mock_checker):
+        with patch.object(
+            checker,
+            "check_tcp_connectivity",
+            new_callable=AsyncMock,
+            return_value=(True, 50.0, None),
+        ):
+            with patch(
+                "v2ray_finder.health_checker.RealConnectivityChecker",
+                return_value=mock_checker,
+            ):
                 result = await checker.check_server_health(vmess, "vmess")
 
         assert result.google_204_ok is True
@@ -528,10 +626,16 @@ class TestHealthCheckerGoogle204:
         mock_checker.is_xray_available.return_value = True
         mock_checker.check_server_real_sync.return_value = mock_real_result
 
-        with patch.object(checker, "check_tcp_connectivity",
-                          new_callable=AsyncMock, return_value=(True, 30.0, None)):
-            with patch("v2ray_finder.health_checker.RealConnectivityChecker",
-                       return_value=mock_checker):
+        with patch.object(
+            checker,
+            "check_tcp_connectivity",
+            new_callable=AsyncMock,
+            return_value=(True, 30.0, None),
+        ):
+            with patch(
+                "v2ray_finder.health_checker.RealConnectivityChecker",
+                return_value=mock_checker,
+            ):
                 result = await checker.check_server_health(vmess, "vmess")
 
         assert result.quality_score == pytest.approx(10.0, abs=0.5)
@@ -544,10 +648,16 @@ class TestHealthCheckerGoogle204:
         mock_checker = MagicMock()
         mock_checker.is_xray_available.return_value = False
 
-        with patch.object(checker, "check_tcp_connectivity",
-                          new_callable=AsyncMock, return_value=(True, 50.0, None)):
-            with patch("v2ray_finder.health_checker.RealConnectivityChecker",
-                       return_value=mock_checker):
+        with patch.object(
+            checker,
+            "check_tcp_connectivity",
+            new_callable=AsyncMock,
+            return_value=(True, 50.0, None),
+        ):
+            with patch(
+                "v2ray_finder.health_checker.RealConnectivityChecker",
+                return_value=mock_checker,
+            ):
                 result = await checker.check_server_health(vmess, "vmess")
 
         assert result.probe_level == 1
@@ -558,10 +668,16 @@ class TestHealthCheckerGoogle204:
         checker = HealthChecker(check_google_204=True)
         vmess = _make_vmess("example.com", 443)
 
-        with patch.object(checker, "check_tcp_connectivity",
-                          new_callable=AsyncMock, return_value=(True, 50.0, None)):
-            with patch("v2ray_finder.health_checker.RealConnectivityChecker",
-                       side_effect=RuntimeError("xray crashed")):
+        with patch.object(
+            checker,
+            "check_tcp_connectivity",
+            new_callable=AsyncMock,
+            return_value=(True, 50.0, None),
+        ):
+            with patch(
+                "v2ray_finder.health_checker.RealConnectivityChecker",
+                side_effect=RuntimeError("xray crashed"),
+            ):
                 result = await checker.check_server_health(vmess, "vmess")
 
         assert result.tcp_ok is True
@@ -573,9 +689,15 @@ class TestHealthCheckerGoogle204:
         checker = HealthChecker(check_google_204=False)
         vmess = _make_vmess("example.com", 443)
 
-        with patch.object(checker, "check_tcp_connectivity",
-                          new_callable=AsyncMock, return_value=(True, 50.0, None)):
-            with patch("v2ray_finder.health_checker.RealConnectivityChecker") as mock_cls:
+        with patch.object(
+            checker,
+            "check_tcp_connectivity",
+            new_callable=AsyncMock,
+            return_value=(True, 50.0, None),
+        ):
+            with patch(
+                "v2ray_finder.health_checker.RealConnectivityChecker"
+            ) as mock_cls:
                 result = await checker.check_server_health(vmess, "vmess")
 
         mock_cls.assert_not_called()
@@ -585,6 +707,7 @@ class TestHealthCheckerGoogle204:
 # ---------------------------------------------------------------------------
 # HealthChecker — batch helpers
 # ---------------------------------------------------------------------------
+
 
 class TestHealthCheckerBatch:
     @pytest.mark.asyncio
@@ -597,9 +720,15 @@ class TestHealthCheckerBatch:
         checker = HealthChecker()
         vmess1 = _make_vmess("host1.com", 443)
         vmess2 = _make_vmess("host2.com", 8443)
-        with patch.object(checker, "check_tcp_connectivity",
-                          new_callable=AsyncMock, return_value=(True, 30.0, None)):
-            results = await checker.check_servers_batch([(vmess1, "vmess"), (vmess2, "vmess")])
+        with patch.object(
+            checker,
+            "check_tcp_connectivity",
+            new_callable=AsyncMock,
+            return_value=(True, 30.0, None),
+        ):
+            results = await checker.check_servers_batch(
+                [(vmess1, "vmess"), (vmess2, "vmess")]
+            )
         assert len(results) == 2
         assert all(r.status == HealthStatus.HEALTHY for r in results)
 
@@ -612,8 +741,12 @@ class TestHealthCheckerBatch:
         async def mock_health(config, protocol):
             if "bad" in config:
                 raise RuntimeError("simulated crash")
-            return ServerHealth(config=config, protocol=protocol,
-                                status=HealthStatus.HEALTHY, tcp_ok=True)
+            return ServerHealth(
+                config=config,
+                protocol=protocol,
+                status=HealthStatus.HEALTHY,
+                tcp_ok=True,
+            )
 
         with patch.object(checker, "check_server_health", side_effect=mock_health):
             results = await checker.check_servers_batch(
@@ -642,6 +775,7 @@ class TestHealthCheckerBatch:
 # filter_healthy_servers
 # ---------------------------------------------------------------------------
 
+
 class TestFilterHealthyServers:
     def test_removes_invalid(self):
         results = [
@@ -666,10 +800,19 @@ class TestFilterHealthyServers:
 
     def test_min_quality_score_filters_slow(self):
         results = [
-            ServerHealth(config="fast", protocol="vmess", status=HealthStatus.HEALTHY, latency_ms=50.0),
-            ServerHealth(config="dead", protocol="vmess", status=HealthStatus.UNREACHABLE),
+            ServerHealth(
+                config="fast",
+                protocol="vmess",
+                status=HealthStatus.HEALTHY,
+                latency_ms=50.0,
+            ),
+            ServerHealth(
+                config="dead", protocol="vmess", status=HealthStatus.UNREACHABLE
+            ),
         ]
-        filtered = filter_healthy_servers(results, exclude_unreachable=False, min_quality_score=50.0)
+        filtered = filter_healthy_servers(
+            results, exclude_unreachable=False, min_quality_score=50.0
+        )
         assert len(filtered) == 1
         assert filtered[0].config == "fast"
 
@@ -688,11 +831,22 @@ class TestFilterHealthyServers:
 # sort_by_quality
 # ---------------------------------------------------------------------------
 
+
 class TestSortByQuality:
     def test_descending_puts_fastest_first(self):
         results = [
-            ServerHealth(config="slow", protocol="vmess", status=HealthStatus.HEALTHY, latency_ms=800.0),
-            ServerHealth(config="fast", protocol="vmess", status=HealthStatus.HEALTHY, latency_ms=50.0),
+            ServerHealth(
+                config="slow",
+                protocol="vmess",
+                status=HealthStatus.HEALTHY,
+                latency_ms=800.0,
+            ),
+            ServerHealth(
+                config="fast",
+                protocol="vmess",
+                status=HealthStatus.HEALTHY,
+                latency_ms=50.0,
+            ),
             ServerHealth(config="dead", protocol="?", status=HealthStatus.UNREACHABLE),
         ]
         sorted_r = sort_by_quality(results)
@@ -701,7 +855,12 @@ class TestSortByQuality:
 
     def test_ascending_puts_slowest_first(self):
         results = [
-            ServerHealth(config="fast", protocol="vmess", status=HealthStatus.HEALTHY, latency_ms=50.0),
+            ServerHealth(
+                config="fast",
+                protocol="vmess",
+                status=HealthStatus.HEALTHY,
+                latency_ms=50.0,
+            ),
             ServerHealth(config="dead", protocol="?", status=HealthStatus.UNREACHABLE),
         ]
         sorted_r = sort_by_quality(results, descending=False)
