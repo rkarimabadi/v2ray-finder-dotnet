@@ -26,8 +26,13 @@ Retry policy (V1-D4)
 --------------------
 :func:`check_one` retries **once** with a fresh free port when xray fails to
 start (port contention, flaky binary, etc.).  The retry uses :func:`find_free_port`
-so it never collides with the original port.  Both attempts are logged at
-``DEBUG`` level.  If the retry also fails, the original error is returned.
+so it is unlikely to collide with the original port.  Note: a small TOCTOU
+race exists between :func:`find_free_port` and the actual bind; this is
+unavoidable without OS-level SO_REUSEPORT and is documented here rather than
+silently ignored.  Both attempts are logged at ``DEBUG`` level.
+On retry success ``retried=True`` is set on the returned result.
+If the retry also fails, **both** the original and retry errors are included
+in ``result.error``, and ``retried=True`` is still set.
 """
 
 from __future__ import annotations
@@ -57,7 +62,12 @@ _GOOGLE_204_PORT = 80
 # ---------------------------------------------------------------------------
 
 def find_free_port() -> int:
-    """Return an available TCP port on localhost."""
+    """Return an available TCP port on localhost.
+
+    Note: a TOCTOU race exists between this call and the subsequent bind.
+    In practice the window is tiny, but callers should be prepared to handle
+    a second failure and not treat this as a guaranteed-free port.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("", 0))
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -442,6 +452,37 @@ class _LegacyResult:
     retried: bool = False
 
 
+def _try_start_xray(
+    port: int,
+    cfg: Any,
+    binary_path: Optional[str],
+    auto_download: bool,
+) -> Tuple[Optional[str], Optional[XrayRunner]]:
+    """Attempt to start xray on *port*.
+
+    Returns ``(None, runner)`` on success or ``(error_str, None)`` on failure.
+    Guarantees that the runner is stopped if ``start()`` raises, preventing
+    resource leaks in the calling retry loop.
+    """
+    runner = XrayRunner(
+        local_port=port,
+        binary_path=binary_path,
+        auto_download=auto_download,
+    )
+    try:
+        runner.start(cfg)
+        return None, runner
+    except RuntimeError as exc:
+        # Best-effort cleanup: XrayRunner.stop() is a no-op when not started,
+        # but call it anyway to release any partial state (open file handles,
+        # half-initialised subprocess, etc.).
+        try:
+            runner.stop()
+        except Exception:
+            pass
+        return str(exc), None
+
+
 def check_one(
     uri: str,
     local_port: int = 10808,
@@ -456,8 +497,15 @@ def check_one(
     If xray fails to start (port contention, flaky binary, etc.), one retry is
     attempted with a fresh port from :func:`find_free_port`.  Both attempts are
     logged at DEBUG level.  On retry success ``retried=True`` is set on the
-    returned result.  If the retry also fails, the *original* error is returned
-    with ``retried=True``.
+    returned result.  If the retry also fails, both the original and retry
+    error messages are included in ``result.error`` and ``retried=True`` is
+    still set.
+
+    Resource safety
+    ---------------
+    :func:`_try_start_xray` always stops the runner on failure so no file
+    handles or subprocess state leaks from a failed start attempt.
+    The successful runner is stopped in a ``finally`` block after the probe.
     """
     if "://" not in uri:
         return _LegacyResult(config=uri, protocol="unknown", error="Not a valid URI")
@@ -470,21 +518,8 @@ def check_one(
             error="Could not convert URI to xray config",
         )
 
-    def _attempt(port: int, cfg: Any) -> Optional[str]:
-        """Try to start xray on *port*. Returns error string or None on success."""
-        runner = XrayRunner(
-            local_port=port,
-            binary_path=binary_path,
-            auto_download=auto_download,
-        )
-        try:
-            runner.start(cfg)
-            return None, runner
-        except RuntimeError as exc:
-            return str(exc), None
-
     # --- First attempt ---
-    err_msg, runner = _attempt(local_port, xray_cfg)
+    err_msg, runner = _try_start_xray(local_port, xray_cfg, binary_path, auto_download)
     retried = False
 
     if err_msg is not None:
@@ -500,7 +535,7 @@ def check_one(
             "[check_one] xray start failed on port %d (%s); retrying on port %d.",
             local_port, err_msg, retry_port,
         )
-        retry_err, runner = _attempt(retry_port, retry_cfg)
+        retry_err, runner = _try_start_xray(retry_port, retry_cfg, binary_path, auto_download)
         retried = True
         if retry_err is not None:
             logger.debug(
@@ -513,6 +548,9 @@ def check_one(
                 retried=True,
             )
         local_port = retry_port
+
+    # runner is guaranteed non-None here: both failure paths returned above.
+    assert runner is not None  # noqa: S101 — invariant, not user-facing
 
     # --- Probe ---
     try:
