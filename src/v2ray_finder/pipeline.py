@@ -54,6 +54,21 @@ highest ``SourceTrust`` value wins (first-wins among equals).  This means
 ``source_trust`` and ``overlap_ratio`` in every health/score dict always
 reflect the real originating source, not an arbitrary one.
 
+Unified error model (V1-D2)
+---------------------------
+``PipelineResult.stats["errors"]`` is now ``Dict[str, dict]`` where each
+value is a structured error payload from the ``V2RayFinderError`` hierarchy::
+
+    {
+      "error_type": str,   # e.g. "timeout_error", "rate_limit_exceeded"
+      "message":    str,
+      "details":    dict,
+    }
+
+Use :attr:`PipelineResult.failed_sources` for the structured view, or
+:attr:`PipelineResult.failed_source_messages` for the legacy
+``Dict[str, str]`` view.
+
 Stub-ability
 ------------
 Tests may replace :meth:`_fetch_all_sync` on an instance::
@@ -171,6 +186,8 @@ class PipelineResult:
         ----
         stats    -- pipeline run statistics (fetched, deduped, healthy, ...).
                     Includes ``layer3_cache`` when Layer 3 ran (V1-Q4).
+                    ``errors`` is now a ``Dict[str, dict]`` with structured
+                    error payloads (V1-D2).
         servers  -- list of :meth:`~scorer.ServerScore.to_dict` dicts,
                     ordered by score (best first).
         configs  -- raw config strings in score order (convenience duplicate).
@@ -186,13 +203,51 @@ class PipelineResult:
         """Return a JSON string of :meth:`to_dict`."""
         return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False)
 
+    # V1-D2: structured error access ---------------------------------------
+
     @property
-    def failed_sources(self) -> Dict[str, str]:
-        """V1-D2: sources that failed during fetch, keyed by URL."""
+    def failed_sources(self) -> Dict[str, dict]:
+        """V1-D2: sources that failed during fetch.
+
+        Returns ``Dict[str, dict]`` where each value is a structured error
+        payload from the ``V2RayFinderError`` hierarchy::
+
+            {
+              "error_type": str,   # e.g. "timeout_error"
+              "message":    str,
+              "details":    dict,
+            }
+
+        For the legacy plain-string view use
+        :attr:`failed_source_messages`.
+        """
         errors = self.stats.get("errors")
         if isinstance(errors, dict):
-            return errors
+            return {
+                url: payload
+                for url, payload in errors.items()
+                if isinstance(payload, dict)
+            }
         return {}
+
+    @property
+    def failed_source_messages(self) -> Dict[str, str]:
+        """V1-D2: legacy ``Dict[str, str]`` view of fetch errors.
+
+        Returns the ``message`` field from each structured error, or the
+        raw string value for entries not yet migrated to the structured
+        format.
+        """
+        errors = self.stats.get("errors")
+        if not isinstance(errors, dict):
+            return {}
+        out: Dict[str, str] = {}
+        for url, payload in errors.items():
+            if isinstance(payload, dict):
+                out[url] = payload.get("message", str(payload))
+            else:
+                out[url] = str(payload)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -251,15 +306,9 @@ class Pipeline:
         else:
             self._cache = None
 
-        # Build a lookup from source URL → trust value (int) for attribution.
-        # Computed once at construction; used in _build_config_source_map.
         self._source_trust_map: Dict[str, int] = {
             s.url: s.trust.value for s in self.sources
         }
-
-        # Shared HealthChecker — created once and reused across run() calls.
-        # This keeps the Layer-3 RealConnectivityChecker (and its result cache)
-        # alive between runs so clear_caches() can reach it (V1-Q4).
         self._health_checker: Optional[Any] = None
 
     # ------------------------------------------------------------------
@@ -267,13 +316,6 @@ class Pipeline:
     # ------------------------------------------------------------------
 
     def clear_caches(self) -> None:
-        """Clear all in-pipeline caches between runs.
-
-        Clears:
-        - Source-text TTL cache (:class:`~cache.CacheManager`) if enabled.
-        - Layer-3 result cache (``RealConnectivityChecker._cache``) if
-          ``check_google_204=True`` and a checker was previously created.
-        """
         if self._cache is not None:
             try:
                 self._cache.clear()
@@ -285,7 +327,6 @@ class Pipeline:
             if checker is not None:
                 try:
                     checker.clear_result_cache()
-                    logger.debug("[pipeline] Layer-3 result cache cleared.")
                 except Exception as exc:
                     logger.debug("[pipeline] Layer-3 cache clear failed: %s", exc)
 
@@ -305,7 +346,7 @@ class Pipeline:
             "fetched": 0, "deduped": 0, "healthy": 0, "scored": 0,
             "dropped_per_source": 0, "dropped_global": 0,
             "cache_hits": 0, "cache_misses": 0,
-            "errors": {},
+            "errors": {},  # V1-D2: Dict[str, dict] structured error payloads
         }
 
         # Stage 1: Fetch
@@ -317,13 +358,18 @@ class Pipeline:
             stats["cache_misses"] = cs.get("misses", 0)
 
         for url in list(servers_by_source.keys()):
-            if isinstance(servers_by_source[url], str):
-                stats["errors"][url] = servers_by_source.pop(url)
+            val = servers_by_source[url]
+            # V1-D2: accept both structured dicts and legacy strings as errors
+            if isinstance(val, (str, dict)) and not isinstance(val, list):
+                stats["errors"][url] = (
+                    val if isinstance(val, dict)
+                    else {"error_type": "unknown_error", "message": val, "details": {}}
+                )
+                del servers_by_source[url]
                 continue
-            full = servers_by_source[url]
-            if len(full) > self.max_configs_per_source:
-                dropped = len(full) - self.max_configs_per_source
-                servers_by_source[url] = full[: self.max_configs_per_source]
+            if len(val) > self.max_configs_per_source:
+                dropped = len(val) - self.max_configs_per_source
+                servers_by_source[url] = val[: self.max_configs_per_source]
                 stats["dropped_per_source"] += dropped
                 logger.warning(
                     "[pipeline] %s: capped at %d configs (%d dropped).",
@@ -342,10 +388,6 @@ class Pipeline:
             dropped_global = len(configs) - self.max_total_configs
             configs = configs[: self.max_total_configs]
             stats["dropped_global"] = dropped_global
-            logger.warning(
-                "[pipeline] Global cap: kept %d configs, dropped %d after dedup.",
-                self.max_total_configs, dropped_global,
-            )
 
         if self.limit:
             configs = configs[: self.limit]
@@ -357,8 +399,6 @@ class Pipeline:
             result.stats = stats
             return result
 
-        # V1-C1: build per-config source attribution map before health checks.
-        # Each config is mapped to the highest-trust source that contained it.
         config_source_map = self._build_config_source_map(servers_by_source)
 
         # Stage 3: Health checks
@@ -373,7 +413,6 @@ class Pipeline:
             )
         stats["healthy"] = len(result.health_dicts)
 
-        # V1-Q4: capture Layer-3 cache stats after health checks
         if self.check_google_204 and self._health_checker is not None:
             l3 = getattr(self._health_checker, "_layer3_checker", None)
             if l3 is not None:
@@ -407,27 +446,8 @@ class Pipeline:
         self,
         servers_by_source: Dict[str, List[str]],
     ) -> Dict[str, str]:
-        """Return a mapping ``config → source_url`` with correct trust priority.
-
-        When the same config appears in multiple sources the source with the
-        **highest** ``SourceTrust`` value wins.  Among sources with equal
-        trust, the first one encountered wins (stable).
-
-        Implementation note
-        -------------------
-        Sources are iterated in **descending** trust order so that the
-        highest-trust source is processed first.  ``setdefault`` is then used
-        for assignment, which means the first write (highest trust) is never
-        overwritten by a later lower-trust source.  This is the correct
-        "highest-trust wins" semantic.
-
-        Previously the code used unconditional assignment (``config_source[cfg]
-        = url``), which caused the *last* processed source — the lowest-trust
-        one — to win.  That was the V1-C1 bug.
-        """
+        """Return config → source_url with highest-trust-wins semantics."""
         config_source: Dict[str, str] = {}
-        # Sort descending so highest-trust sources are processed first;
-        # setdefault ensures the first (highest-trust) assignment is kept.
         for url in sorted(
             servers_by_source.keys(),
             key=lambda u: self._source_trust_map.get(u, 1),
@@ -524,7 +544,14 @@ class Pipeline:
                     _store_cache(fr.url, fr.content)
                     self._process_fetch_result(fr, servers_by_source)
                 elif not fr.success:
-                    servers_by_source[fr.url] = fr.error or "fetch failed"
+                    # V1-D2: store structured error, fall back to plain string
+                    servers_by_source[fr.url] = (
+                        fr.structured_error
+                        if fr.structured_error is not None
+                        else {"error_type": "unknown_error",
+                              "message": fr.error or "fetch failed",
+                              "details": {}}
+                    )
                 completed += 1
                 self._emit(progress_callback, "fetch", completed, total,
                            f"Fetched {completed}/{total} sources…")
@@ -559,13 +586,26 @@ class Pipeline:
                         fr.url, fr.status_code,
                     )
                     github_rate_limited = True
-                    servers_by_source[fr.url] = f"rate_limited:{fr.status_code}"
+                    # V1-D2: structured rate-limit error
+                    servers_by_source[fr.url] = (
+                        fr.structured_error
+                        if fr.structured_error is not None
+                        else {"error_type": "rate_limit_exceeded",
+                              "message": f"rate_limited:{fr.status_code}",
+                              "details": {"status_code": fr.status_code}}
+                    )
                 else:
                     if fr.success and fr.content:
                         _store_cache(fr.url, fr.content)
                         self._process_fetch_result(fr, servers_by_source)
                     elif not fr.success:
-                        servers_by_source[fr.url] = fr.error or "fetch failed"
+                        servers_by_source[fr.url] = (
+                            fr.structured_error
+                            if fr.structured_error is not None
+                            else {"error_type": "unknown_error",
+                                  "message": fr.error or "fetch failed",
+                                  "details": {}}
+                        )
                 completed += 1
                 self._emit(progress_callback, "fetch", completed, total,
                            f"Fetched {completed}/{total} sources…")
@@ -600,8 +640,6 @@ class Pipeline:
     ) -> List[Dict[str, Any]]:
         from .health_checker import HealthChecker, filter_healthy_servers
 
-        # Reuse existing checker so Layer-3 cache persists across batches
-        # and is accessible via clear_caches() / stats (V1-Q4).
         if self._health_checker is None:
             self._health_checker = HealthChecker(
                 timeout=self.timeout,
@@ -637,9 +675,6 @@ class Pipeline:
 
         result_dicts: List[Dict[str, Any]] = []
         for h in healthy:
-            # V1-C1: look up the actual originating source for this config.
-            # config_source_map was built with highest-trust-wins semantics
-            # so this is always the correct (highest-trust) source URL.
             src_url   = config_source_map.get(h.config, "")
             src_trust = self._source_trust_map.get(src_url, 1)
             proto = (
