@@ -1,26 +1,36 @@
-"""Command-line interface for v2ray-finder."""
+"""Command-line interface for v2ray-finder.
+
+Non-interactive path (``-o`` / ``--stats-only``) is wired through
+:class:`~pipeline.Pipeline` (V1-A1).  Interactive menu still talks
+directly to :class:`~core.V2RayServerFinder` and will be migrated
+under V1-A2.
+"""
+
+from __future__ import annotations
 
 import argparse
 import os
 import sys
 import threading
 from getpass import getpass
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from .core import V2RayServerFinder
 from .exceptions import AuthenticationError, RateLimitError
+from .pipeline import Pipeline
+from .pipeline import StopController as PipelineStopController
 
 
-class StopController:
+# ---------------------------------------------------------------------------
+# CLI-only StopController (interactive background 'q' listener)
+# ---------------------------------------------------------------------------
+
+class _CLIStopController:
     """
     Thread-safe stop controller for **non-interactive** CLI mode only.
 
     Starts a single daemon thread that blocks on ``input()`` and calls
     ``finder.request_stop()`` when the user types ``q`` + Enter.
-
-    This must NOT be used while the main thread is also calling ``input()``
-    (i.e. in interactive menu mode), because two concurrent ``input()`` calls
-    compete for stdin and silently discard one of the inputs.
     """
 
     def __init__(self, finder: V2RayServerFinder) -> None:
@@ -29,7 +39,6 @@ class StopController:
         self._thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
-        """Reset finder stop flag and start the background listener thread."""
         self._finder.reset_stop()
         self._active.set()
         print(
@@ -42,12 +51,6 @@ class StopController:
         self._thread.start()
 
     def _listen(self) -> None:
-        """Background thread: read stdin, call request_stop() on 'q'.
-
-        Exits immediately when stdin is not a real tty (e.g. during pytest
-        capture) to avoid 'OSError: pytest: reading from stdin while output
-        is captured!' warnings.
-        """
         if not sys.stdin.isatty():
             self._active.clear()
             return
@@ -67,11 +70,19 @@ class StopController:
                 break
 
     def stop(self) -> None:
-        """Signal the listener to exit (non-blocking; thread is daemon)."""
         self._active.clear()
 
 
-def print_stats(servers, show_health: bool = False, show_xray: bool = False) -> None:
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def print_stats(
+    servers: List,
+    show_health: bool = False,
+    show_xray: bool = False,
+    pipeline_stats: Optional[Dict[str, Any]] = None,
+) -> None:
     """Print statistics about fetched servers."""
     if not servers:
         print("No servers found.")
@@ -90,43 +101,40 @@ def print_stats(servers, show_health: bool = False, show_xray: bool = False) -> 
     for proto, count in sorted(protocols.items(), key=lambda x: x[1], reverse=True):
         print(f"  {proto}: {count}")
 
+    if pipeline_stats:
+        print("\nPipeline stats:")
+        for k, v in pipeline_stats.items():
+            print(f"  {k}: {v}")
+
     if show_health and servers and isinstance(servers[0], dict):
-        healthy = sum(1 for s in servers if s.get("health_status") == "healthy")
-        degraded = sum(1 for s in servers if s.get("health_status") == "degraded")
-        unreachable = sum(1 for s in servers if s.get("health_status") == "unreachable")
-        invalid = sum(1 for s in servers if s.get("health_status") == "invalid")
+        healthy    = sum(1 for s in servers if s.get("health_status") == "healthy")
+        degraded   = sum(1 for s in servers if s.get("health_status") == "degraded")
+        unreachable= sum(1 for s in servers if s.get("health_status") == "unreachable")
+        invalid    = sum(1 for s in servers if s.get("health_status") == "invalid")
         print("\nHealth status:")
-        print(f"  Healthy: {healthy}")
-        print(f"  Degraded: {degraded}")
+        print(f"  Healthy:     {healthy}")
+        print(f"  Degraded:    {degraded}")
         print(f"  Unreachable: {unreachable}")
-        print(f"  Invalid: {invalid}")
-        if healthy > 0:
+        print(f"  Invalid:     {invalid}")
+        if healthy:
             avg_quality = (
-                sum(
-                    s.get("quality_score", 0)
-                    for s in servers
-                    if s.get("health_status") == "healthy"
-                )
-                / healthy
+                sum(s.get("quality_score", 0) for s in servers
+                    if s.get("health_status") == "healthy") / healthy
             )
             avg_latency = (
-                sum(
-                    s.get("latency_ms", 0)
-                    for s in servers
-                    if s.get("health_status") == "healthy"
-                )
-                / healthy
+                sum(s.get("latency_ms", 0) for s in servers
+                    if s.get("health_status") == "healthy") / healthy
             )
             print(f"\nAverage quality (healthy): {avg_quality:.1f}/100")
             print(f"Average latency (healthy): {avg_latency:.1f}ms")
 
     if show_xray and servers and isinstance(servers[0], dict):
         reachable = sum(1 for s in servers if s.get("reachable"))
-        g204 = sum(1 for s in servers if s.get("google_204_ok"))
+        g204      = sum(1 for s in servers if s.get("google_204_ok"))
         print("\nxray real-connectivity results:")
         print(f"  Reachable (proxy): {reachable}/{len(servers)}")
         print(f"  Google 204 OK:     {g204}/{len(servers)}")
-        if reachable > 0:
+        if reachable:
             avg_lat = (
                 sum(s.get("latency_ms") or 0 for s in servers if s.get("reachable"))
                 / reachable
@@ -174,15 +182,12 @@ def save_partial_results(
         print(f"\n[!] Failed to save partial results: {exc}\n")
 
 
-def interactive_menu(finder: V2RayServerFinder) -> None:
-    """
-    Display interactive terminal menu.
+# ---------------------------------------------------------------------------
+# Interactive menu (still uses V2RayServerFinder — V1-A2)
+# ---------------------------------------------------------------------------
 
-    Uses ``except KeyboardInterrupt`` per operation instead of a background
-    ``input()`` thread.  Having two concurrent ``input()`` calls (listener +
-    menu) caused the first keystroke after an operation to be silently
-    consumed by the stale listener thread.
-    """
+def interactive_menu(finder: V2RayServerFinder) -> None:
+    """Display interactive terminal menu (V1-A2: not yet migrated to Pipeline)."""
     partial_servers: List = []
 
     while True:
@@ -274,10 +279,10 @@ def interactive_menu(finder: V2RayServerFinder) -> None:
                 if show_top == "y":
                     print("\nTop 10 servers by quality:")
                     for i, s in enumerate(servers[:10], 1):
-                        status = s.get("health_status", "unknown")
+                        status  = s.get("health_status", "unknown")
                         quality = s.get("quality_score", 0)
                         latency = s.get("latency_ms", 0)
-                        proto = s.get("protocol", "?")
+                        proto   = s.get("protocol", "?")
                         print(
                             f"{i:2d}. [{proto:8s}] Quality: {quality:5.1f} "
                             f"| Latency: {latency:6.1f}ms | Status: {status}"
@@ -289,11 +294,9 @@ def interactive_menu(finder: V2RayServerFinder) -> None:
                     input("Enter filename (default: v2ray_servers.txt): ").strip()
                     or "v2ray_servers.txt"
                 )
-                use_search = input("Use GitHub search? (y/n): ").strip().lower() == "y"
-                check_health = (
-                    input("Check server health? (y/n): ").strip().lower() == "y"
-                )
-                limit_str = input("Limit (0 for all): ").strip()
+                use_search   = input("Use GitHub search? (y/n): ").strip().lower() == "y"
+                check_health = input("Check server health? (y/n): ").strip().lower() == "y"
+                limit_str    = input("Limit (0 for all): ").strip()
             except (KeyboardInterrupt, EOFError):
                 print("\n[!] Cancelled")
                 continue
@@ -312,7 +315,7 @@ def interactive_menu(finder: V2RayServerFinder) -> None:
                     )
                     output: List[str] = [s["config"] for s in health_data]
                 else:
-                    raw = finder.get_all_servers(use_github_search=use_search)
+                    raw    = finder.get_all_servers(use_github_search=use_search)
                     output = list(raw)
             except KeyboardInterrupt:
                 finder.request_stop()
@@ -333,10 +336,8 @@ def interactive_menu(finder: V2RayServerFinder) -> None:
 
         elif choice == "5":
             try:
-                use_search = input("Use GitHub search? (y/n): ").strip().lower() == "y"
-                check_health = (
-                    input("Check server health? (y/n): ").strip().lower() == "y"
-                )
+                use_search   = input("Use GitHub search? (y/n): ").strip().lower() == "y"
+                check_health = input("Check server health? (y/n): ").strip().lower() == "y"
             except (KeyboardInterrupt, EOFError):
                 continue
             print("\nFetching servers for statistics...")
@@ -364,11 +365,10 @@ def interactive_menu(finder: V2RayServerFinder) -> None:
             rate_info = finder.get_rate_limit_info()
             if rate_info:
                 print("\nGitHub API Rate Limit:")
-                print(f"  Limit: {rate_info['limit']}")
+                print(f"  Limit:     {rate_info['limit']}")
                 print(f"  Remaining: {rate_info['remaining']}")
                 if rate_info["reset"]:
                     from datetime import datetime
-
                     reset_time = datetime.fromtimestamp(rate_info["reset"])
                     print(f"  Resets at: {reset_time}")
             else:
@@ -380,7 +380,7 @@ def interactive_menu(finder: V2RayServerFinder) -> None:
         elif choice == "7":
             try:
                 use_search = input("Use GitHub search? (y/n): ").strip().lower() == "y"
-                limit_str = input("Limit servers to check (0 for all): ").strip()
+                limit_str  = input("Limit servers to check (0 for all): ").strip()
             except (KeyboardInterrupt, EOFError):
                 continue
             limit = int(limit_str) if limit_str and limit_str != "0" else None
@@ -405,27 +405,126 @@ def interactive_menu(finder: V2RayServerFinder) -> None:
             print("Invalid option. Please try again.")
 
 
-def main() -> None:
-    """Main CLI entry point."""
+# ---------------------------------------------------------------------------
+# Non-interactive pipeline runner (V1-A1)
+# ---------------------------------------------------------------------------
+
+def _run_pipeline(
+    args: argparse.Namespace,
+    token: Optional[str],
+) -> int:
+    """Execute the non-interactive path via :class:`~pipeline.Pipeline`.
+
+    Returns the process exit code (0 = success, 1 = error, 130 = stopped).
+    """
+    stop_ctrl = PipelineStopController()
+
+    # Wire Ctrl+C to the pipeline stop event
+    import signal
+    original_sigint = signal.getsignal(signal.SIGINT)
+
+    def _on_sigint(sig: int, frame: Any) -> None:  # type: ignore[type-arg]
+        stop_ctrl.stop()
+
+    signal.signal(signal.SIGINT, _on_sigint)
+
+    if not args.quiet:
+        action     = "GitHub search" if args.search else "known sources"
+        health_note= " with health checking" if args.check_health else ""
+        xray_note  = " with xray real-check" if args.xray_check else ""
+        print(f"Fetching servers from {action}{health_note}{xray_note}...")
+        print("[i] Press Ctrl+C at any time to stop and save partial results\n")
+
+    pipeline = Pipeline(
+        check_health     = args.check_health or args.xray_check,
+        check_http_probe = False,
+        check_google_204 = args.xray_check,
+        timeout          = args.health_timeout,
+        min_quality_score= args.min_quality,
+        limit            = args.limit,
+        binary_path      = getattr(args, "xray_binary", None),
+        github_token     = token,
+    )
+
+    result = pipeline.run(stop_event=stop_ctrl.event)
+
+    # Restore original SIGINT handler
+    signal.signal(signal.SIGINT, original_sigint)
+
+    if stop_ctrl.is_set():
+        print("\n[!] Operation stopped by user")
+        out_file = args.output if args.output else "v2ray_servers_partial.txt"
+        save_partial_results(
+            [{"config": c} for c in result.top_configs] if result.scores
+            else [{"config": c} for c in result.configs],
+            out_file,
+        )
+        print_stats(
+            result.scores or result.configs,  # type: ignore[arg-type]
+            show_health=args.check_health,
+            show_xray=args.xray_check,
+            pipeline_stats=result.stats,
+        )
+        return 130
+
+    # Determine output list
+    if result.scores:
+        output_configs = result.top_configs
+    else:
+        output_configs = result.configs
+
+    if args.limit:
+        output_configs = output_configs[: args.limit]
+
+    if args.stats_only:
+        print_stats(
+            result.health_dicts or [{"config": c} for c in output_configs],
+            show_health=args.check_health,
+            show_xray=args.xray_check,
+            pipeline_stats=result.stats,
+        )
+        return 0
+
+    if args.output:
+        try:
+            with open(args.output, "w", encoding="utf-8") as fh:
+                for cfg in output_configs:
+                    fh.write(f"{cfg}\n")
+        except OSError as exc:
+            print(f"\nFailed to write {args.output}: {exc}", file=sys.stderr)
+            return 1
+        if not args.quiet:
+            print(f"\n[\u2713] Saved {len(output_configs)} servers to {args.output}")
+            if result.stats:
+                print(
+                    f"    (fetched {result.stats.get('fetched', '?')}, "
+                    f"deduped {result.stats.get('deduped', '?')}, "
+                    f"healthy {result.stats.get('healthy', '?')})"
+                )
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Argument parser
+# ---------------------------------------------------------------------------
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Fetch and aggregate V2Ray server configs from GitHub",
         epilog="For security, use GITHUB_TOKEN environment variable instead of -t flag.",
     )
     parser.add_argument(
-        "-t",
-        "--token",
+        "-t", "--token",
         help="GitHub token (DEPRECATED: use GITHUB_TOKEN env var instead)",
     )
     parser.add_argument(
-        "--prompt-token",
-        action="store_true",
+        "--prompt-token", action="store_true",
         help="Prompt for GitHub token interactively (secure input)",
     )
     parser.add_argument("-o", "--output", help="Output filename for saving servers")
     parser.add_argument(
-        "-s",
-        "--search",
-        action="store_true",
+        "-s", "--search", action="store_true",
         help="Include GitHub repository search",
     )
     parser.add_argument("-l", "--limit", type=int, help="Limit number of servers")
@@ -434,26 +533,19 @@ def main() -> None:
     )
     parser.add_argument("-q", "--quiet", action="store_true", help="Minimal output")
     parser.add_argument(
-        "-c",
-        "--check-health",
-        action="store_true",
+        "-c", "--check-health", action="store_true",
         help="Check server health (TCP connectivity and latency)",
     )
     parser.add_argument(
-        "--min-quality",
-        type=float,
-        default=0.0,
+        "--min-quality", type=float, default=0.0,
         help="Minimum quality score (0-100, default: 0)",
     )
     parser.add_argument(
-        "--health-timeout",
-        type=float,
-        default=5.0,
+        "--health-timeout", type=float, default=5.0,
         help="Health check timeout in seconds (default: 5.0)",
     )
     parser.add_argument(
-        "--xray-check",
-        action="store_true",
+        "--xray-check", action="store_true",
         help="Run real connectivity check via xray proxy (ground-truth)",
     )
     parser.add_argument(
@@ -461,12 +553,20 @@ def main() -> None:
         help="Path to xray binary (auto-downloaded if not found)",
     )
     parser.add_argument(
-        "--xray-no-download",
-        action="store_true",
+        "--xray-no-download", action="store_true",
         help="Disable automatic xray binary download",
     )
+    return parser
 
-    args = parser.parse_args()
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    """Main CLI entry point."""
+    parser = _build_parser()
+    args   = parser.parse_args()
 
     # --- Token resolution ---
     token: Optional[str] = None
@@ -489,139 +589,14 @@ def main() -> None:
     elif not token and not args.prompt_token and not any([args.output, args.stats_only]):
         token = prompt_for_token()
 
-    finder = V2RayServerFinder(token=token)
-
-    # --- Interactive mode ---
+    # --- Interactive mode (V1-A2: still uses V2RayServerFinder) ---
     if not any([args.output, args.stats_only]):
+        finder = V2RayServerFinder(token=token)
         interactive_menu(finder)
         return
 
-    # --- Non-interactive mode ---
-    if not args.quiet:
-        action = "GitHub search" if args.search else "known sources"
-        health_note = " with health checking" if args.check_health else ""
-        xray_note = " with xray real-check" if args.xray_check else ""
-        print(f"Fetching servers from {action}{health_note}{xray_note}...")
-
-    ctrl = StopController(finder)
-    ctrl.start()
-    partial_servers: List = []
-    servers: List = []
-
-    try:
-        if args.xray_check:
-            raw = finder.get_all_servers(use_github_search=args.search)
-            raw_list = list(raw)
-            if args.limit:
-                raw_list = raw_list[: args.limit]
-            servers = finder.get_servers_with_real_health(
-                raw_list,
-                binary_path=args.xray_binary,
-                auto_download=not args.xray_no_download,
-            )
-        elif args.check_health:
-            servers = finder.get_servers_with_health(
-                use_github_search=args.search,
-                check_health=True,
-                health_timeout=args.health_timeout,
-                min_quality_score=args.min_quality,
-                filter_unhealthy=True,
-            )
-        else:
-            servers = finder.get_all_servers(use_github_search=args.search)
-        partial_servers = servers
-
-    except KeyboardInterrupt:
-        finder.request_stop()
-        servers = partial_servers
-
-    except RateLimitError as exc:
-        ctrl.stop()
-        print("\nError: GitHub API rate limit exceeded!", file=sys.stderr)
-        print(f"Limit: {exc.details.get('limit', 'unknown')}", file=sys.stderr)
-        print(f"Remaining: {exc.details.get('remaining', 0)}", file=sys.stderr)
-        if "reset_at" in exc.details:
-            print(f"Resets at: {exc.details['reset_at']}", file=sys.stderr)
-        print(
-            "\nConsider using a GitHub token (5000/hour vs 60/hour).",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    except AuthenticationError as exc:
-        ctrl.stop()
-        print(f"\nError: {exc}", file=sys.stderr)
-        print("Please check your GitHub token.", file=sys.stderr)
-        sys.exit(1)
-
-    except Exception as exc:
-        ctrl.stop()
-        print(f"\nUnexpected error: {exc}", file=sys.stderr)
-        if partial_servers:
-            print("Attempting to save partial results...")
-            save_partial_results(partial_servers)
-        sys.exit(1)
-
-    finally:
-        ctrl.stop()
-
-    if finder.should_stop():
-        print("\n[!] Operation stopped by user")
-        if partial_servers:
-            out_file = args.output if args.output else "v2ray_servers_partial.txt"
-            save_partial_results(partial_servers, out_file)
-            show_xray = args.xray_check
-            print_stats(
-                partial_servers,
-                show_health=args.check_health,
-                show_xray=show_xray,
-            )
-        sys.exit(130)
-
-    if args.stats_only:
-        print_stats(
-            servers,
-            show_health=args.check_health,
-            show_xray=args.xray_check,
-        )
-        rate_info = finder.get_rate_limit_info()
-        if rate_info and args.search:
-            print(
-                f"\nAPI calls remaining: "
-                f"{rate_info['remaining']}/{rate_info['limit']}"
-            )
-        return
-
-    if args.output:
-        if (
-            (args.check_health or args.xray_check)
-            and servers
-            and isinstance(servers[0], dict)
-        ):
-            output_servers: List[str] = [s["config"] for s in servers]
-        else:
-            output_servers = list(servers)
-
-        if args.limit:
-            output_servers = output_servers[: args.limit]
-
-        try:
-            with open(args.output, "w", encoding="utf-8") as fh:
-                for server in output_servers:
-                    fh.write(f"{server}\n")
-        except OSError as exc:
-            print(f"\nFailed to write {args.output}: {exc}", file=sys.stderr)
-            sys.exit(1)
-
-        if not args.quiet:
-            print(f"\n[\u2713] Saved {len(output_servers)} servers to {args.output}")
-
-        rate_info = finder.get_rate_limit_info()
-        if rate_info and args.search and not args.quiet:
-            print(
-                f"API calls remaining: "
-                f"{rate_info['remaining']}/{rate_info['limit']}"
-            )
+    # --- Non-interactive mode via Pipeline (V1-A1) ---
+    sys.exit(_run_pipeline(args, token))
 
 
 if __name__ == "__main__":
