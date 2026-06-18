@@ -258,14 +258,21 @@ class RealConnectivityChecker:
     # ------------------------------------------------------------------
 
     def is_xray_available(self) -> bool:
-        """Return True if the xray binary can be located."""
+        """Return True if the xray binary can be located.
+
+        Delegates to XrayRunner.is_available() which calls find_binary(),
+        searching PATH, common install dirs, and the v2ray-finder cache dir.
+        Previously this checked the non-existent public attribute
+        `runner.binary_path` (the real field is `_binary_path`), causing
+        Layer 3 health checks to be silently skipped on every run.
+        """
         try:
             runner = XrayRunner(
                 local_port=10808,
                 binary_path=self.binary_path,
                 auto_download=False,
             )
-            return runner.binary_path is not None
+            return runner.is_available()
         except Exception:
             return False
 
