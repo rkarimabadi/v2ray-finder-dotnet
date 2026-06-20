@@ -4,7 +4,7 @@
 [![Python Versions](https://img.shields.io/pypi/pyversions/v2ray-finder.svg)](https://pypi.org/project/v2ray-finder/)
 [![Tests](https://github.com/alisadeghiaghili/v2ray-finder/workflows/Tests/badge.svg)](https://github.com/alisadeghiaghili/v2ray-finder/actions)
 [![Code Quality](https://github.com/alisadeghiaghili/v2ray-finder/workflows/Code%20Quality/badge.svg)](https://github.com/alisadeghiaghili/v2ray-finder/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![GitHub Stars](https://img.shields.io/github/stars/alisadeghiaghili/v2ray-finder?style=flat)](https://github.com/alisadeghiaghili/v2ray-finder/stargazers)
 
 [فارسی](README.fa.md) | [English](README.en.md) | **Deutsch** (diese Seite) | [📋 CHANGELOG](CHANGELOG.md)
@@ -219,7 +219,11 @@ black . && isort . && flake8 src/
 
 ## 📝 Lizenz
 
-MIT-Lizenz © 2026 Ali Sadeghi Aghili
+Apache License 2.0 © 2026 Ali Sadeghi Aghili
+
+Dieses Projekt steht unter der **Apache License 2.0**. Jede abgeleitete Arbeit,
+Portierung oder Weiterverteilung muss die Datei [`NOTICE`](NOTICE) beibehalten
+und den ursprünglichen Autor nennen. Vollständiger Text in [`LICENSE`](LICENSE).
 
 ---
 

@@ -4,7 +4,7 @@
 [![Python Versions](https://img.shields.io/pypi/pyversions/v2ray-finder.svg)](https://pypi.org/project/v2ray-finder/)
 [![Tests](https://github.com/alisadeghiaghili/v2ray-finder/workflows/Tests/badge.svg)](https://github.com/alisadeghiaghili/v2ray-finder/actions)
 [![Code Quality](https://github.com/alisadeghiaghili/v2ray-finder/workflows/Code%20Quality/badge.svg)](https://github.com/alisadeghiaghili/v2ray-finder/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![GitHub Stars](https://img.shields.io/github/stars/alisadeghiaghili/v2ray-finder?style=flat)](https://github.com/alisadeghiaghili/v2ray-finder/stargazers)
 
 [فارسی](README.fa.md) | **English** (this page) | [Deutsch](README.de.md) | [📋 CHANGELOG](CHANGELOG.md)
@@ -367,8 +367,11 @@ pytest tests/ --cov=v2ray_finder --cov-report=html
 
 ## 📝 License
 
-MIT License © 2026 Ali Sadeghi Aghili  
-Free to use, modify, and redistribute.
+Apache License 2.0 © 2026 Ali Sadeghi Aghili
+
+This project is licensed under the **Apache License 2.0**. Any derivative work,
+port, or redistribution must retain the [`NOTICE`](NOTICE) file and credit the
+original author. See [`LICENSE`](LICENSE) for full terms.
 
 ---
 

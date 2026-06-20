@@ -4,7 +4,7 @@
 [![Python Versions](https://img.shields.io/pypi/pyversions/v2ray-finder.svg)](https://pypi.org/project/v2ray-finder/)
 [![Tests](https://github.com/alisadeghiaghili/v2ray-finder/workflows/Tests/badge.svg)](https://github.com/alisadeghiaghili/v2ray-finder/actions)
 [![Code Quality](https://github.com/alisadeghiaghili/v2ray-finder/workflows/Code%20Quality/badge.svg)](https://github.com/alisadeghiaghili/v2ray-finder/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![GitHub Stars](https://img.shields.io/github/stars/alisadeghiaghili/v2ray-finder?style=flat)](https://github.com/alisadeghiaghili/v2ray-finder/stargazers)
 
 **فارسی** (این صفحه) | [English](README.en.md) | [Deutsch](README.de.md) | [📋 CHANGELOG](CHANGELOG.md)
@@ -281,7 +281,9 @@ pytest tests/ --cov=v2ray_finder --cov-report=html
 
 ## 📝 مجوز
 
-MIT License © 2026 Ali Sadeghi Aghili
+Apache License 2.0 © 2026 Ali Sadeghi Aghili
+
+این پروژه تحت **Apache License 2.0** منتشر شده. هر کار مشتق، پورت، یا توزیع مجدد باید فایل [`NOTICE`](NOTICE) را نگه داره و نام نویسنده اصلی را ذکر کنه. متن کامل در [`LICENSE`](LICENSE).
 
 ---
 
