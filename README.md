@@ -1,83 +1,78 @@
-# v2ray-finder
+# V2Ray Finder — .NET Edition
 
-[![PyPI version](https://badge.fury.io/py/v2ray-finder.svg)](https://badge.fury.io/py/v2ray-finder)
-[![Python Versions](https://img.shields.io/pypi/pyversions/v2ray-finder.svg)](https://pypi.org/project/v2ray-finder/)
-[![Tests](https://github.com/alisadeghiaghili/v2ray-finder/workflows/Tests/badge.svg)](https://github.com/alisadeghiaghili/v2ray-finder/actions)
-[![Code Quality](https://github.com/alisadeghiaghili/v2ray-finder/workflows/Code%20Quality/badge.svg)](https://github.com/alisadeghiaghili/v2ray-finder/actions)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![GitHub Stars](https://img.shields.io/github/stars/alisadeghiaghili/v2ray-finder?style=flat)](https://github.com/alisadeghiaghili/v2ray-finder/stargazers)
+Port of [v2ray-finder](https://github.com/alisadeghiaghili/v2ray-finder) in **C# / .NET 8**.
 
-[فارسی](README.fa.md) | [English](README.en.md) | [Deutsch](README.de.md) | [📋 CHANGELOG](CHANGELOG.md)
+## ساختار پروژه
 
----
-
-A **high-performance** tool to **fetch, aggregate, validate and health-check public V2Ray server configs** from GitHub and curated subscription sources.
-
-**Built with love for eternal freedom ❤️**
-
----
-
-## 🗂️ Repository Structure
-
-This is a **monorepo** containing two independent implementations of v2ray-finder:
-
-| Directory | Language | Description |
-|-----------|----------|-------------|
-| *(root)* | 🐍 Python | Original Python implementation — PyPI package, CLI, GUI |
-| [`dotnet/`](dotnet/) | ⚡ .NET / C# | .NET port — contributed by the community |
-
-## ⚡ .NET Port
-A community .NET/C# port is available at [v2ray-finder-dotnet](https://github.com/rkarimabadi/v2ray-finder-dotnet) — contributed by [@rkarimabadi](https://github.com/rkarimabadi).
-
-Each implementation is self-contained. You can use either one independently.
-
----
-
-## 🐍 Python — Quick Start
-
-```python
-from v2ray_finder import Pipeline, StopController
-
-pipeline = Pipeline(check_health=True)
-result = pipeline.run()
-for score in result.scores[:5]:
-    print(score.grade, score.config[:80])
 ```
+V2RayFinder/
+├── src/
+│   ├── V2RayFinder.Core/          # کتابخانه اصلی
+│   │   ├── Models/Models.cs       # مدل‌ها (V2RayConfig, Result<T,E>, ...)
+│   │   ├── ConfigParser.cs        # پارسر کانفیگ‌های V2Ray
+│   │   ├── SubscriptionSources.cs # لیست منابع عمومی
+│   │   ├── SubscriptionFetcher.cs # فچر async با retry و structured error
+│   │   ├── HealthChecker.cs       # بررسی سلامت TCP
+│   │   ├── ConfigScorer.cs        # امتیازدهی A–F
+│   │   └── Pipeline.cs            # ارکستراتور اصلی
+│   └── V2RayFinder.Cli/           # برنامه CLI
+│       └── Program.cs
+```
+
+## معادل‌سازی با Python
+
+| Python | C# |
+|--------|-----|
+| `Pipeline` | `Pipeline` |
+| `AsyncFetcher` | `SubscriptionFetcher` |
+| `HealthChecker` | `HealthChecker` |
+| `ConfigScorer` | `ConfigScorer` |
+| `StopController` | `CancellationToken` |
+| `Result[T, E]` | `Result<T, E>` |
+| `FetchResult.structured_error` | `FetchResult.StructuredError` |
+| `PipelineResult` | `PipelineResult` |
+
+## نصب و اجرا
 
 ```bash
-pip install v2ray-finder                # core
-pip install "v2ray-finder[async]"       # + httpx for concurrent fetch
-pip install "v2ray-finder[all]"         # everything
+# Build
+dotnet build
+
+# Run CLI
+dotnet run --project src/V2RayFinder.Cli -- -o servers.txt
+dotnet run --project src/V2RayFinder.Cli -- --check-health -l 200 -o healthy.txt
 ```
 
-> **Full Python docs:** [README.en.md](README.en.md) | **فارسی:** [README.fa.md](README.fa.md) | **Changelog:** [CHANGELOG.md](CHANGELOG.md)
+## استفاده از API
 
----
+```csharp
+using V2RayFinder.Core;
 
-## ⚡ .NET — Quick Start
+// ساده‌ترین حالت
+var pipeline = new Pipeline(checkHealth: true);
+var result = await pipeline.RunAsync();
 
-See [`dotnet/README.md`](dotnet/README.md) for installation and usage.
+Console.WriteLine($"Fetched: {result.Stats.Fetched}, Unique: {result.Stats.Deduped}");
+foreach (var score in result.Scores.Take(10))
+    Console.WriteLine($"{score.Grade}  {score.Total:F3}  {score.Config[..80]}");
 
----
+// با cancellation
+using var cts = new CancellationTokenSource();
+var result = await pipeline.RunAsync(cts.Token, onProgress: (stage, cur, tot, msg) =>
+    Console.WriteLine($"[{stage}] {cur}/{tot} {msg}"));
 
-## 🚀 What's New in v0.7.0 (Python)
+// ذخیره در فایل
+await File.WriteAllLinesAsync("servers.txt", result.Scores.Select(s => s.Config));
+```
 
-🛡️ **Structured error model** — `FetchResult.structured_error` with `category` / `kind` / `message` hierarchy (V1-D2)  
-🔄 **xray Layer-3 port-contention retry** — auto-retry on a fresh OS port when xray fails to bind (V1-D4)  
-🖥️ **GUI fully migrated to Pipeline** — Stop button, real progress bar, Score/Grade/Latency columns, Failed Sources panel (V1-A2)  
+## CLI Options
 
----
-
-## 🧪 Test Coverage (Python)
-
-~85% across Python 3.8–3.12, Linux, macOS & Windows.
-
----
-
-## 📝 License
-
-Apache License 2.0 © 2026 Ali Sadeghi Aghili
-
-This project is licensed under the **Apache License 2.0**. Any derivative work,
-port, or redistribution must retain the [`NOTICE`](NOTICE) file and credit the
-original author. See [`LICENSE`](LICENSE) for full terms.
+```
+-o, --output <file>    ذخیره در فایل
+-c, --check-health     بررسی TCP
+-l, --limit <n>        حداکثر تعداد کانفیگ
+-n, --top <n>          نمایش N کانفیگ برتر (default: 10)
+-j, --concurrency <n>  همزمانی fetch (default: 10)
+    --timeout <sec>    تایم‌اوت (default: 15)
+-h, --help             راهنما
+```
