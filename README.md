@@ -6,7 +6,7 @@ Port of [v2ray-finder](https://github.com/alisadeghiaghili/v2ray-finder) in **C#
 
 ---
 ## Demo
-https://rkarimabadi.github.io/v2rayfinder-dotnet/
+https://rkarimabadi.github.io/v2ray-finder-dotnet/
 ## ویژگی‌ها
 
 - ✅ اجرای کامل در مرورگر (WebAssembly / Client-Side)
