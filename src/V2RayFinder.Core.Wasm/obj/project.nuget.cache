@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "XGINIMeviqg=",
+  "success": true,
+  "projectFilePath": "D:\\Projects\\person\\v2ray-finder\\src\\V2RayFinder.Core.Wasm\\V2RayFinder.Core.Wasm.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\karimabadi.r\\.nuget\\packages\\microsoft.net.sdk.compilers.toolset\\9.0.200\\microsoft.net.sdk.compilers.toolset.9.0.200.nupkg.sha512"
+  ],
+  "logs": []
+}

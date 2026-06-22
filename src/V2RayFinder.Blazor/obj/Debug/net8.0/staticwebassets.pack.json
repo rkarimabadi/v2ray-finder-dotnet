@@ -1,0 +1,41 @@
+{
+  "Files": [
+    {
+      "Id": "D:\\Desktop\\V2RayFinderBlazor\\V2RayFinderBlazor\\src\\V2RayFinder.Blazor\\bin\\Debug\\net8.0\\wwwroot\\_framework\\blazor.webassembly.js",
+      "PackagePath": "staticwebassets\\_framework\\blazor.webassembly.js"
+    },
+    {
+      "Id": "D:\\Desktop\\V2RayFinderBlazor\\V2RayFinderBlazor\\src\\V2RayFinder.Blazor\\wwwroot\\css\\app.css",
+      "PackagePath": "staticwebassets\\css\\app.css"
+    },
+    {
+      "Id": "D:\\Desktop\\V2RayFinderBlazor\\V2RayFinderBlazor\\src\\V2RayFinder.Blazor\\wwwroot\\favicon.svg",
+      "PackagePath": "staticwebassets\\favicon.svg"
+    },
+    {
+      "Id": "D:\\Desktop\\V2RayFinderBlazor\\V2RayFinderBlazor\\src\\V2RayFinder.Blazor\\wwwroot\\index.html",
+      "PackagePath": "staticwebassets\\index.html"
+    },
+    {
+      "Id": "obj\\Debug\\net8.0\\staticwebassets\\msbuild.V2RayFinder.Blazor.Microsoft.AspNetCore.StaticWebAssetEndpoints.props",
+      "PackagePath": "build\\Microsoft.AspNetCore.StaticWebAssetEndpoints.props"
+    },
+    {
+      "Id": "obj\\Debug\\net8.0\\staticwebassets\\msbuild.V2RayFinder.Blazor.Microsoft.AspNetCore.StaticWebAssets.props",
+      "PackagePath": "build\\Microsoft.AspNetCore.StaticWebAssets.props"
+    },
+    {
+      "Id": "obj\\Debug\\net8.0\\staticwebassets\\msbuild.build.V2RayFinder.Blazor.props",
+      "PackagePath": "build\\V2RayFinder.Blazor.props"
+    },
+    {
+      "Id": "obj\\Debug\\net8.0\\staticwebassets\\msbuild.buildMultiTargeting.V2RayFinder.Blazor.props",
+      "PackagePath": "buildMultiTargeting\\V2RayFinder.Blazor.props"
+    },
+    {
+      "Id": "obj\\Debug\\net8.0\\staticwebassets\\msbuild.buildTransitive.V2RayFinder.Blazor.props",
+      "PackagePath": "buildTransitive\\V2RayFinder.Blazor.props"
+    }
+  ],
+  "ElementsToRemove": []
+}

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>V2Ray Finder</title>
+    <base href="/" />
+
+    <!-- Persian font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;700&display=swap" rel="stylesheet" />
+
+    <!-- JetBrains Mono for code -->
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+</head>
+<body>
+    <div id="app">
+        <!-- Splash shown while Blazor boots -->
+        <div id="splash">
+            <div class="splash-inner">
+                <div class="splash-logo">⚡ V2RayFinder</div>
+                <div class="splash-bar">
+                    <div class="splash-fill"></div>
+                </div>
+                <p class="splash-msg">در حال بارگذاری...</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="blazor-error-ui">
+        خطا در اجرای برنامه.
+        <a href="" class="reload">بارگذاری مجدد</a>
+        <a class="dismiss">✕</a>
+    </div>
+
+    <style>
+        #splash {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background: #0d1117;
+            font-family: 'Vazirmatn', sans-serif;
+            direction: rtl;
+        }
+        .splash-inner {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+        .splash-logo {
+            font-size: 28px;
+            font-weight: 700;
+            color: #58a6ff;
+            letter-spacing: -0.5px;
+        }
+        .splash-bar {
+            width: 200px;
+            height: 4px;
+            background: #21262d;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .splash-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #1f6feb, #58a6ff);
+            border-radius: 2px;
+            animation: splash-slide 1.4s ease-in-out infinite;
+        }
+        @keyframes splash-slide {
+            0%   { width: 0%;   margin-left: 0%; }
+            50%  { width: 60%;  margin-left: 20%; }
+            100% { width: 0%;   margin-left: 100%; }
+        }
+        .splash-msg { font-size: 13px; color: #8b949e; }
+    </style>
+
+    <script>
+        // ── Download helper ───────────────────────────────────────────────
+        window.downloadBase64 = function (filename, base64) {
+            const a = document.createElement('a');
+            a.href = 'data:text/plain;base64,' + base64;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        };
+
+        // ── Clipboard fallback ────────────────────────────────────────────
+        // navigator.clipboard.writeText is already used from Blazor;
+        // this handles older browsers (rare for WASM users but good hygiene)
+        if (!navigator.clipboard) {
+            navigator.clipboard = {
+                writeText: function (text) {
+                    const el = document.createElement('textarea');
+                    el.value = text;
+                    el.setAttribute('readonly', '');
+                    el.style.position = 'absolute';
+                    el.style.left = '-9999px';
+                    document.body.appendChild(el);
+                    el.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(el);
+                    return Promise.resolve();
+                }
+            };
+        }
+    </script>
+
+    <script src="_framework/blazor.webassembly.js"></script>
+</body>
+</html>

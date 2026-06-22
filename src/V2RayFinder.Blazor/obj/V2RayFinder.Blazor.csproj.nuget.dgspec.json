@@ -1,0 +1,198 @@
+{
+  "format": 1,
+  "restore": {
+    "D:\\Desktop\\V2RayFinderBlazor\\V2RayFinderBlazor\\src\\V2RayFinder.Blazor\\V2RayFinder.Blazor.csproj": {}
+  },
+  "projects": {
+    "D:\\Desktop\\V2RayFinderBlazor\\V2RayFinderBlazor\\src\\V2RayFinder.Blazor\\V2RayFinder.Blazor.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "D:\\Desktop\\V2RayFinderBlazor\\V2RayFinderBlazor\\src\\V2RayFinder.Blazor\\V2RayFinder.Blazor.csproj",
+        "projectName": "V2RayFinder.Blazor",
+        "projectPath": "D:\\Desktop\\V2RayFinderBlazor\\V2RayFinderBlazor\\src\\V2RayFinder.Blazor\\V2RayFinder.Blazor.csproj",
+        "packagesPath": "C:\\Users\\karimabadi.r\\.nuget\\packages\\",
+        "outputPath": "D:\\Desktop\\V2RayFinderBlazor\\V2RayFinderBlazor\\src\\V2RayFinder.Blazor\\obj\\",
+        "projectStyle": "PackageReference",
+        "fallbackFolders": [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages",
+          "C:\\Program Files\\dotnet\\sdk\\NuGetFallbackFolder"
+        ],
+        "configFilePaths": [
+          "C:\\Users\\karimabadi.r\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0"
+        ],
+        "sources": {
+          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+          "C:\\Program Files\\dotnet\\library-packs": {},
+          "D:\\Projects\\XAct.Core.PCL\\XAct.Core.PCL\\bin\\Debug": {},
+          "D:\\nuget": {},
+          "https://api.nuget.org/v3/index.json": {},
+          "https://repo.ime.co.ir/repository/nuget-group/index.json": {},
+          "https://repo.ime.co.ir/repository/nuget-hosted/": {}
+        },
+        "frameworks": {
+          "net8.0": {
+            "targetAlias": "net8.0",
+            "projectReferences": {
+              "D:\\Desktop\\V2RayFinderBlazor\\V2RayFinderBlazor\\src\\V2RayFinder.Core.Wasm\\V2RayFinder.Core.Wasm.csproj": {
+                "projectPath": "D:\\Desktop\\V2RayFinderBlazor\\V2RayFinderBlazor\\src\\V2RayFinder.Core.Wasm\\V2RayFinder.Core.Wasm.csproj"
+              }
+            }
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "9.0.200"
+      },
+      "frameworks": {
+        "net8.0": {
+          "targetAlias": "net8.0",
+          "dependencies": {
+            "Microsoft.AspNetCore.Components.WebAssembly": {
+              "target": "Package",
+              "version": "[8.0.0, )"
+            },
+            "Microsoft.AspNetCore.Components.WebAssembly.DevServer": {
+              "suppressParent": "All",
+              "target": "Package",
+              "version": "[8.0.0, )"
+            },
+            "Microsoft.NET.ILLink.Tasks": {
+              "suppressParent": "All",
+              "target": "Package",
+              "version": "[8.0.13, )",
+              "autoReferenced": true
+            },
+            "Microsoft.NET.Sdk.WebAssembly.Pack": {
+              "suppressParent": "All",
+              "target": "Package",
+              "version": "[9.0.2, )",
+              "autoReferenced": true
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "downloadDependencies": [
+            {
+              "name": "Microsoft.Net.Sdk.Compilers.Toolset",
+              "version": "[9.0.200, 9.0.200]"
+            },
+            {
+              "name": "Microsoft.NETCore.App.Runtime.Mono.browser-wasm",
+              "version": "[8.0.13, 8.0.13]"
+            }
+          ],
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.200/PortableRuntimeIdentifierGraph.json"
+        }
+      },
+      "runtimes": {
+        "browser-wasm": {
+          "#import": []
+        }
+      }
+    },
+    "D:\\Desktop\\V2RayFinderBlazor\\V2RayFinderBlazor\\src\\V2RayFinder.Core.Wasm\\V2RayFinder.Core.Wasm.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "D:\\Desktop\\V2RayFinderBlazor\\V2RayFinderBlazor\\src\\V2RayFinder.Core.Wasm\\V2RayFinder.Core.Wasm.csproj",
+        "projectName": "V2RayFinder.Core.Wasm",
+        "projectPath": "D:\\Desktop\\V2RayFinderBlazor\\V2RayFinderBlazor\\src\\V2RayFinder.Core.Wasm\\V2RayFinder.Core.Wasm.csproj",
+        "packagesPath": "C:\\Users\\karimabadi.r\\.nuget\\packages\\",
+        "outputPath": "D:\\Desktop\\V2RayFinderBlazor\\V2RayFinderBlazor\\src\\V2RayFinder.Core.Wasm\\obj\\",
+        "projectStyle": "PackageReference",
+        "fallbackFolders": [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages",
+          "C:\\Program Files\\dotnet\\sdk\\NuGetFallbackFolder"
+        ],
+        "configFilePaths": [
+          "C:\\Users\\karimabadi.r\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0"
+        ],
+        "sources": {
+          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+          "C:\\Program Files\\dotnet\\library-packs": {},
+          "D:\\Projects\\XAct.Core.PCL\\XAct.Core.PCL\\bin\\Debug": {},
+          "D:\\nuget": {},
+          "https://api.nuget.org/v3/index.json": {},
+          "https://repo.ime.co.ir/repository/nuget-group/index.json": {},
+          "https://repo.ime.co.ir/repository/nuget-hosted/": {}
+        },
+        "frameworks": {
+          "net8.0": {
+            "targetAlias": "net8.0",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "9.0.200"
+      },
+      "frameworks": {
+        "net8.0": {
+          "targetAlias": "net8.0",
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "downloadDependencies": [
+            {
+              "name": "Microsoft.Net.Sdk.Compilers.Toolset",
+              "version": "[9.0.200, 9.0.200]"
+            }
+          ],
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.200/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}

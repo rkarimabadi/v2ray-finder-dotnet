@@ -1,0 +1,401 @@
+@page "/"
+@inject WasmPipeline Pipeline
+@inject IJSRuntime JS
+
+<PageTitle>V2Ray Finder</PageTitle>
+
+<div class="page">
+
+    <!-- ── Header ─────────────────────────────────────────────── -->
+    <header class="header">
+        <div class="header-inner">
+            <div class="logo">
+                <span class="logo-icon">⚡</span>
+                <span class="logo-text">V2Ray<span class="logo-accent">Finder</span></span>
+            </div>
+            <p class="header-sub">دریافت، فیلتر و امتیازدهی کانفیگ‌های رایگان V2Ray / Xray</p>
+        </div>
+    </header>
+
+    <!-- ── Controls ───────────────────────────────────────────── -->
+    <section class="controls-card">
+        <div class="controls-grid">
+
+            <div class="control-group">
+                <label class="control-label">حداکثر کانفیگ</label>
+                <input class="control-input" type="number" min="0" step="100"
+                       @bind="_limit" disabled="@_running" />
+                <span class="control-hint">0 = بدون محدودیت</span>
+            </div>
+
+            <div class="control-group">
+                <label class="control-label">همزمانی دریافت</label>
+                <input class="control-input" type="number" min="1" max="10"
+                       @bind="_concurrency" disabled="@_running" />
+                <span class="control-hint">1–10 (مرورگر محدود می‌کند)</span>
+            </div>
+
+            <div class="control-group">
+                <label class="control-label">پروکسی CORS</label>
+                <label class="toggle">
+                    <input type="checkbox" @bind="_useCorsProxy" disabled="@_running" />
+                    <span class="toggle-track"></span>
+                    <span class="toggle-label">@(_useCorsProxy ? "فعال" : "غیرفعال")</span>
+                </label>
+                <span class="control-hint">برای دور زدن محدودیت مرورگر</span>
+            </div>
+
+            <div class="control-group">
+                <label class="control-label">فیلتر پروتکل</label>
+                <select class="control-input" @bind="_protocolFilter" disabled="@_running">
+                    <option value="">همه</option>
+                    <option value="Vless">vless</option>
+                    <option value="Vmess">vmess</option>
+                    <option value="Trojan">trojan</option>
+                    <option value="Shadowsocks">shadowsocks</option>
+                </select>
+            </div>
+
+        </div>
+
+        <div class="controls-actions">
+            @if (!_running)
+            {
+                <button class="btn btn-primary" @onclick="StartAsync">
+                    <span>▶ شروع</span>
+                </button>
+            }
+            else
+            {
+                <button class="btn btn-danger" @onclick="Stop">
+                    <span>⏹ توقف</span>
+                </button>
+            }
+            @if (_result is not null && !_running)
+            {
+                <button class="btn btn-secondary" @onclick="CopyAll">
+                    📋 کپی همه
+                </button>
+                <button class="btn btn-secondary" @onclick="DownloadTxt">
+                    ⬇ دانلود .txt
+                </button>
+            }
+        </div>
+    </section>
+
+    <!-- ── Progress ───────────────────────────────────────────── -->
+    @if (_running || _progress is not null)
+    {
+        <section class="progress-card">
+            <div class="progress-stage">@_stageIcon @_progress?.Stage?.ToUpperInvariant()</div>
+            <div class="progress-bar-wrap">
+                <div class="progress-bar" style="width: @ProgressPercent%"></div>
+            </div>
+            <p class="progress-msg">@_progress?.Message</p>
+        </section>
+    }
+
+    <!-- ── Stats bar ──────────────────────────────────────────── -->
+    @if (_result is not null)
+    {
+        <section class="stats-bar">
+            <div class="stat">
+                <span class="stat-num">@_result.Stats.TotalSources</span>
+                <span class="stat-lbl">منابع</span>
+            </div>
+            <div class="stat">
+                <span class="stat-num ok">@(_result.Stats.TotalSources - _result.Stats.FailedSources)</span>
+                <span class="stat-lbl">موفق</span>
+            </div>
+            <div class="stat">
+                <span class="stat-num">@_result.Stats.Fetched</span>
+                <span class="stat-lbl">دریافت‌شده</span>
+            </div>
+            <div class="stat">
+                <span class="stat-num accent">@_result.Stats.Deduped</span>
+                <span class="stat-lbl">منحصربه‌فرد</span>
+            </div>
+            <div class="stat">
+                <span class="stat-num accent">@_result.Stats.Scored</span>
+                <span class="stat-lbl">امتیازدهی</span>
+            </div>
+            @if (_result.Stats.FailedSources > 0)
+            {
+                <div class="stat">
+                    <span class="stat-num err">@_result.Stats.FailedSources</span>
+                    <span class="stat-lbl">خطا</span>
+                </div>
+            }
+        </section>
+
+        <!-- Protocol breakdown -->
+        <section class="proto-breakdown">
+            @foreach (var g in ProtocolGroups)
+            {
+                <div class="proto-pill proto-@g.Key.ToLower()">
+                    <span class="proto-name">@g.Key</span>
+                    <span class="proto-count">@g.Value</span>
+                </div>
+            }
+        </section>
+    }
+
+    <!-- ── Results table ──────────────────────────────────────── -->
+    @if (FilteredScores.Any())
+    {
+        <section class="results-section">
+            <div class="results-header">
+                <h2 class="results-title">نتایج  <span class="results-count">@FilteredScores.Count کانفیگ</span></h2>
+                <input class="search-box" type="search" placeholder="جستجو..." @bind="_searchTerm" @bind:event="oninput" />
+            </div>
+
+            <div class="table-wrap">
+                <table class="configs-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th @onclick='() => SetSort("grade")' class="sortable">
+                                گرید @SortArrow("grade")
+                            </th>
+                            <th @onclick='() => SetSort("score")' class="sortable">
+                                امتیاز @SortArrow("score")
+                            </th>
+                            <th @onclick='() => SetSort("protocol")' class="sortable">
+                                پروتکل @SortArrow("protocol")
+                            </th>
+                            <th>منبع</th>
+                            <th>کانفیگ</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var (score, idx) in PagedScores.Select((s, i) => (s, i + (_page - 1) * _pageSize + 1)))
+                        {
+                            <tr class="config-row">
+                                <td class="col-num">@idx</td>
+                                <td class="col-grade">
+                                    <span class="grade grade-@score.Grade.ToLower()">@score.Grade</span>
+                                </td>
+                                <td class="col-score">@score.Total.ToString("F2")</td>
+                                <td class="col-proto">
+                                    <span class="proto-badge proto-@score.Protocol.ToString().ToLower()">
+                                        @score.Protocol.ToString().ToLower()
+                                    </span>
+                                </td>
+                                <td class="col-source">@(score.Source ?? "—")</td>
+                                <td class="col-config">
+                                    <code class="config-text">@Truncate(score.Config, 60)</code>
+                                </td>
+                                <td class="col-actions">
+                                    <button class="btn-icon" title="کپی" @onclick="() => CopyOne(score.Config)">📋</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Pagination -->
+            <div class="pagination">
+                <button class="pg-btn" disabled="@(_page <= 1)" @onclick="PrevPage">‹ قبلی</button>
+                <span class="pg-info">صفحه @_page از @TotalPages</span>
+                <button class="pg-btn" disabled="@(_page >= TotalPages)" @onclick="NextPage">بعدی ›</button>
+            </div>
+        </section>
+    }
+
+    <!-- ── Failed sources collapsible ─────────────────────────── -->
+    @if (_result?.FailedUrls.Any() == true)
+    {
+        <details class="failed-panel">
+            <summary>منابع ناموفق (@_result.FailedUrls.Count)</summary>
+            <ul class="failed-list">
+                @foreach (var url in _result.FailedUrls)
+                {
+                    <li>@url</li>
+                }
+            </ul>
+        </details>
+    }
+
+    <!-- ── Toast ──────────────────────────────────────────────── -->
+    @if (_toast is not null)
+    {
+        <div class="toast">@_toast</div>
+    }
+
+</div>
+
+@code {
+    // ── State ──────────────────────────────────────────────────────────────
+    private bool _running;
+    private CancellationTokenSource? _cts;
+    private PipelineResult? _result;
+    private PipelineProgress? _progress;
+    private string? _toast;
+    private System.Timers.Timer? _toastTimer;
+
+    // Controls
+    private int _limit = 500;
+    private int _concurrency = 5;
+    private bool _useCorsProxy = true;
+    private string _protocolFilter = "";
+    private string _searchTerm = "";
+
+    // Table
+    private string _sortBy = "score";
+    private bool _sortDesc = true;
+    private int _page = 1;
+    private int _pageSize = 25;
+
+    // ── Computed ───────────────────────────────────────────────────────────
+    private IReadOnlyList<ConfigScore> FilteredScores
+    {
+        get
+        {
+            if (_result is null) return [];
+            var q = _result.Scores.AsEnumerable();
+
+            if (!string.IsNullOrEmpty(_protocolFilter))
+                q = q.Where(s => s.Protocol.ToString() == _protocolFilter);
+
+            if (!string.IsNullOrEmpty(_searchTerm))
+                q = q.Where(s => s.Config.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase)
+                               || (s.Source ?? "").Contains(_searchTerm, StringComparison.OrdinalIgnoreCase));
+
+            q = (_sortBy, _sortDesc) switch
+            {
+                ("grade",    true)  => q.OrderBy(s => s.Grade),
+                ("grade",    false) => q.OrderByDescending(s => s.Grade),
+                ("protocol", true)  => q.OrderBy(s => s.Protocol.ToString()),
+                ("protocol", false) => q.OrderByDescending(s => s.Protocol.ToString()),
+                (_,          true)  => q.OrderByDescending(s => s.Total),
+                _                   => q.OrderBy(s => s.Total),
+            };
+
+            return q.ToList();
+        }
+    }
+
+    private IEnumerable<ConfigScore> PagedScores =>
+        FilteredScores.Skip((_page - 1) * _pageSize).Take(_pageSize);
+
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling((double)FilteredScores.Count / _pageSize));
+
+    private Dictionary<string, int> ProtocolGroups =>
+        _result?.Configs
+            .GroupBy(c => c.Protocol.ToString())
+            .OrderByDescending(g => g.Count())
+            .ToDictionary(g => g.Key, g => g.Count())
+        ?? [];
+
+    private int ProgressPercent =>
+        _progress is { Total: > 0 } p ? (int)(100.0 * p.Current / p.Total) : 0;
+
+    private string _stageIcon => _progress?.Stage switch
+    {
+        "fetch" => "⬇",
+        "parse" => "🔍",
+        "dedup" => "♻",
+        "score" => "📊",
+        _ => "•"
+    };
+
+    // ── Methods ────────────────────────────────────────────────────────────
+    private async Task StartAsync()
+    {
+        _running = true;
+        _result = null;
+        _progress = null;
+        _page = 1;
+        _cts = new CancellationTokenSource();
+        StateHasChanged();
+
+        try
+        {
+            var prog = new Progress<PipelineProgress>(p =>
+            {
+                _progress = p;
+                InvokeAsync(StateHasChanged);
+            });
+
+            _result = await Pipeline.RunAsync(
+                useCorsProxy: _useCorsProxy,
+                limit: _limit,
+                concurrency: _concurrency,
+                progress: prog,
+                ct: _cts.Token);
+        }
+        catch (OperationCanceledException) { /* user stopped */ }
+        catch (Exception ex)
+        {
+            ShowToast($"خطا: {ex.Message}");
+        }
+        finally
+        {
+            _running = false;
+            _cts?.Dispose();
+            _cts = null;
+            StateHasChanged();
+        }
+    }
+
+    private void Stop()
+    {
+        _cts?.Cancel();
+    }
+
+    private void SetSort(string col)
+    {
+        if (_sortBy == col) _sortDesc = !_sortDesc;
+        else { _sortBy = col; _sortDesc = true; }
+        _page = 1;
+    }
+
+    private string SortArrow(string col) =>
+        _sortBy != col ? "" : (_sortDesc ? " ▼" : " ▲");
+
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+
+    private async Task CopyOne(string text)
+    {
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+        ShowToast("کانفیگ کپی شد ✓");
+    }
+
+    private async Task CopyAll()
+    {
+        if (_result is null) return;
+        var all = string.Join("\n", FilteredScores.Select(s => s.Config));
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", all);
+        ShowToast($"{FilteredScores.Count} کانفیگ کپی شد ✓");
+    }
+
+    private async Task DownloadTxt()
+    {
+        if (_result is null) return;
+        var content = string.Join("\n", FilteredScores.Select(s => s.Config));
+        var bytes = System.Text.Encoding.UTF8.GetBytes(content);
+        var b64 = Convert.ToBase64String(bytes);
+        await JS.InvokeVoidAsync("downloadBase64", "v2ray-configs.txt", b64);
+    }
+
+    private static string Truncate(string s, int max) =>
+        s.Length > max ? s[..max] + "…" : s;
+
+    private void ShowToast(string msg)
+    {
+        _toast = msg;
+        _toastTimer?.Dispose();
+        _toastTimer = new System.Timers.Timer(2800);
+        _toastTimer.Elapsed += (_, _) =>
+        {
+            _toast = null;
+            _toastTimer?.Dispose();
+            InvokeAsync(StateHasChanged);
+        };
+        _toastTimer.AutoReset = false;
+        _toastTimer.Start();
+    }
+}
