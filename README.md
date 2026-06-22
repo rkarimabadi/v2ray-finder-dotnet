@@ -5,7 +5,8 @@ Port of [v2ray-finder](https://github.com/alisadeghiaghili/v2ray-finder) in **C#
 پورت کامل **V2Ray Finder** به **Blazor WebAssembly** — همه چیز در مرورگر اجرا می‌شود، هیچ سرور بک‌اندی لازم نیست.
 
 ---
-
+## Demo
+https://rkarimabadi.github.io/v2rayfinder-dotnet/
 ## ویژگی‌ها
 
 - ✅ اجرای کامل در مرورگر (WebAssembly / Client-Side)
