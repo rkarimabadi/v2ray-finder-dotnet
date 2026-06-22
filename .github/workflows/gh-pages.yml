@@ -24,7 +24,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'   # use .NET 9 (compatible with 9.0.2)
+          dotnet-version: '9.0.x'   # use .NET 9 (compatible with 9.0.2)
 
       - name: Prepare Blazor WASM for GitHub Pages
         uses: na1307/blazor-github-pages@v4   # recommended action
