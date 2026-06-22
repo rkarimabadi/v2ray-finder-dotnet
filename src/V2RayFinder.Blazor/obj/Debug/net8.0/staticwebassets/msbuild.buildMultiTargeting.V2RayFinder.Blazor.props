@@ -1,3 +1,0 @@
-﻿<Project>
-  <Import Project="..\build\V2RayFinder.Blazor.props" />
-</Project>
