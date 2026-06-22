@@ -30,7 +30,7 @@ jobs:
         uses: na1307/blazor-github-pages@v4   # recommended action
         id: prepare
         with:
-          project-path: src/V2RayFinder.Core.Wasm/src/V2RayFinder.Core.Wasm.csproj
+          project-path: src/V2RayFinder.Blazor/V2RayFinder.Blazor.csproj
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
